@@ -3,7 +3,7 @@ packages:
   CoreMesh:
     path: Packages/CoreMesh # relative to repo root
 options:
-  bundleIdPrefix: com.carter.bitchat
+  bundleIdPrefix: com.carter
   deploymentTarget:
     iOS: 16.0
     macOS: 13.0
@@ -85,7 +85,7 @@ targets:
           - CFBundleURLSchemes:
               - bitchat
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: chat.bitchat
+      PRODUCT_BUNDLE_IDENTIFIER: bitchat
       PRODUCT_NAME: bitchat
       INFOPLIST_FILE: bitchat/Info.plist
       ENABLE_PREVIEWS: YES
@@ -119,7 +119,7 @@ targets:
               NSExtensionActivationSupportsWebURLWithMaxCount: 1
               NSExtensionActivationSupportsImageWithMaxCount: 1
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: chat.bitchat.ShareExtension
+      PRODUCT_BUNDLE_IDENTIFIER: bitchat.ShareExtension
       INFOPLIST_FILE: bitchatShareExtension/Info.plist
       SWIFT_VERSION: 5.0
       IPHONEOS_DEPLOYMENT_TARGET: 16.0
@@ -139,7 +139,7 @@ targets:
       - package: CoreMesh
       - target: bitchat_iOS
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: chat.bitchat.tests
+      PRODUCT_BUNDLE_IDENTIFIER: bitchat.tests
       INFOPLIST_FILE: bitchatTests/Info.plist
       SWIFT_VERSION: 5.0
       IPHONEOS_DEPLOYMENT_TARGET: 16.0
@@ -158,7 +158,7 @@ targets:
     dependencies:
       - target: bitchat_macOS
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: chat.bitchat.tests
+      PRODUCT_BUNDLE_IDENTIFIER: bitchat.tests
       INFOPLIST_FILE: bitchatTests/Info.plist
       SWIFT_VERSION: 5.0
       MACOSX_DEPLOYMENT_TARGET: 13.0

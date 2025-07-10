@@ -75,6 +75,7 @@ jobs:
             -P "$IOS_CERT_PASSWORD" \
             -A -T /usr/bin/codesign
 
+        security find-identity -v -p codesigning build.keychain
         # make the temp keychain the only one Xcode sees
         security list-keychains -d user -s "$KEYCHAIN"
 
@@ -87,6 +88,9 @@ jobs:
         mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
         cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
 
+    - name: Decode provisioning profile
+      run: |
+        security cms -D -i profile.mobileprovision > decoded_profile.plist
     # ─── Archive the app ───────────────────────────────────────────────
     - name: Archive
       run: |
@@ -98,7 +102,7 @@ jobs:
           -archivePath $PWD/build/bitchat.xcarchive \
           CODE_SIGN_STYLE=Manual \
           CODE_SIGN_IDENTITY="iPhone Distribution" \
-          PROVISIONING_PROFILE_SPECIFIER="$(/usr/libexec/PlistBuddy -c 'Print :UUID' profile.mobileprovision)" \
+          PROVISIONING_PROFILE_SPECIFIER="$(/usr/libexec/PlistBuddy -c 'Print :UUID' decoded_profile.plist)" \
           archive | xcpretty
 
     # ─── Export signed .ipa ────────────────────────────────────────────
@@ -114,7 +118,7 @@ jobs:
             <key>signingCertificate</key><string>iPhone Distribution</string>
             <key>provisioningProfiles</key>
               <dict>
-                <key>com.carter.bitchat</key><string>$(/usr/libexec/PlistBuddy -c 'Print :Name' profile.mobileprovision)</string>
+                <key>com.carter.bitchat</key><string>$(/usr/libexec/PlistBuddy -c 'Print :Name' decoded_profile.plist)</string>
               </dict>
           </dict>
         </plist>
