@@ -46,6 +46,7 @@ jobs:
       env:
         IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
       run: |
+        printf '%s' "$IOS_CERT_PASSWORD" | od -An -t x1
         echo "hash of p12 on runner:"
         shasum signing.p12
         echo "Trying to open with supplied password …"
