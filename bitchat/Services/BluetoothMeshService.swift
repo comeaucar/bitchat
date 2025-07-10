@@ -2523,13 +2523,7 @@ extension BluetoothMeshService: CBPeripheralDelegate {
 }
 
 private static func SHA256hexPrefix(of data: Data) -> String {
-    #if canImport(CryptoKit)
-    import CryptoKit
     let digest = SHA256.hash(data: data)
-    #else
-    import Crypto
-    let digest = Crypto.SHA256.hash(data: data)
-    #endif
     // take first 16 hex chars → 8-4-4 template for a valid UUID
     let hex = digest.map { String(format: "%02x", $0) }.joined()
     let form = "\(hex.prefix(8))-\(hex.dropFirst(8).prefix(4))-\(hex.dropFirst(12).prefix(4))-\(hex.dropFirst(16).prefix(4))-\(hex.dropFirst(20).prefix(12))"
@@ -2538,15 +2532,15 @@ private static func SHA256hexPrefix(of data: Data) -> String {
 
     
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
-
-         if let uuid = Self.extractMessageUUID(from: data) {
-        HopLogger.shared.recordHop(messageID: uuid)
-        if let hops = HopLogger.shared.hops(for: uuid) {
-            print("🪄 HopLogger \(uuid) → hop \(hops)")
-        }
-    }
         guard let data = characteristic.value else {
             return
+        }
+
+        // ─── HopLogger --------------------------------------------------------
+        if let uuid = Self.extractMessageUUID(from: data) {
+            HopLogger.shared.recordHop(messageID: uuid)
+            let hops = HopLogger.shared.hopCount(for: uuid) ?? 0   // correct API
+            print("🪄 HopLogger \(uuid) → hop \(hops)")
         }
         
         guard let packet = BitchatPacket.from(data) else { 
