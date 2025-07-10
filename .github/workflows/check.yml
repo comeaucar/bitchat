@@ -31,9 +31,6 @@ jobs:
           -project bitchat.xcodeproj \
           -scheme "bitchat (iOS)" \
           -destination "platform=iOS Simulator,name=iPhone 16" | xcpretty
-    - name: Verify p12 password
-      run: |
-        openssl pkcs12 -in signing.p12 -nokeys -passin pass:"${{ secrets.IOS_CERT_PASSWORD }}" -info -nodes >/dev/null
     # ─── Import signing materials ─────────────────────────────────────
     - name: Decode signing assets
       env:
