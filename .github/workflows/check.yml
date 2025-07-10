@@ -55,15 +55,37 @@ jobs:
           -info -nodes >/dev/null
     # ────────────────────────────────────────────────────────────────────
     # Only if the above succeeds will this import step run
+    # ─── Import certificate into an unlocked temp keychain ────────────────
     - name: Import certificate into temp keychain
       env:
         IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
       run: |
-        security create-keychain -p "" build.keychain
-        security import signing.p12 -k build.keychain -P "$IOS_CERT_PASSWORD" -T /usr/bin/codesign
-        security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+        KEYCHAIN="build.keychain"
+        KEYCHAIN_PW="tmp123"               # any throw-away password
+
+        # create & unlock
+        security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+        security set-keychain-settings -lut 21600 "$KEYCHAIN"   # keep unlocked 6 h
+        security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+
+        # import the p12 (-A = allow all apps, -T codesign needed for Xcode)
+        security import signing.p12 \
+            -k "$KEYCHAIN" \
+            -P "$IOS_CERT_PASSWORD" \
+            -A -T /usr/bin/codesign
+
+        # make the temp keychain the only one Xcode sees
+        security list-keychains -d user -s "$KEYCHAIN"
+
+        # partition-list so xcodebuild can sign non-interactively
+        security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PW" "$KEYCHAIN"
+
+        # install the provisioning profile
         mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
         cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+
     # ─── Archive the app ───────────────────────────────────────────────
     - name: Archive
       run: |
