@@ -24,7 +24,7 @@ jobs:
         spec: project.yml
         version: 2.43.0
     - name: Resolve Swift Packages
-      run: xcodebuild -resolvePackageDependencies -project bitchat_iOS.xcodeproj
+      run: xcodebuild -resolvePackageDependencies -project bitchat.xcodeproj
     - name: Run iOS tests
       run: |
         set -o pipefail && xcodebuild test \
