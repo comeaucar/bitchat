@@ -93,6 +93,8 @@ jobs:
         xcodebuild -project bitchat.xcodeproj \
           -scheme "bitchat (iOS)" \
           -configuration Release \
+          -sdk iphoneos \
+          -destination 'generic/platform=iOS' \
           -archivePath $PWD/build/bitchat.xcarchive \
           CODE_SIGN_STYLE=Manual \
           CODE_SIGN_IDENTITY="iPhone Distribution" \

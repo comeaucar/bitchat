@@ -3,7 +3,7 @@ packages:
   CoreMesh:
     path: Packages/CoreMesh # relative to repo root
 options:
-  bundleIdPrefix: chat.bitchat
+  bundleIdPrefix: com.carter.bitchat
   deploymentTarget:
     iOS: 16.0
     macOS: 13.0
