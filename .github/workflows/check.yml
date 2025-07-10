@@ -114,42 +114,42 @@ jobs:
         xcodebuild -project bitchat.xcodeproj -scheme "bitchat (iOS)" -showBuildSettings | grep -E 'PRODUCT_BUNDLE_IDENTIFIER|DEVELOPMENT_TEAM'
     # ─── Archive the app ───────────────────────────────────────────────
     - name: Archive
-        run: |
-          xcodebuild -project bitchat.xcodeproj \
-            -scheme "bitchat (iOS)" \
-            -configuration Release \
-            -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
-            -archivePath $PWD/build/bitchat.xcarchive \
-            -verbose \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="iPhone Distribution: Carter Comeau (BQYSQ48JA9)" \  # Use full identity string for precision
-            PROVISIONING_PROFILE_SPECIFIER="$(/usr/libexec/PlistBuddy -c 'Print :UUID' decoded_profile.plist)" \
-            archive
+      run: |
+        xcodebuild -project bitchat.xcodeproj \
+          -scheme "bitchat (iOS)" \
+          -configuration Release \
+          -sdk iphoneos \
+          -destination 'generic/platform=iOS' \
+          -archivePath $PWD/build/bitchat.xcarchive \
+          -verbose \
+          CODE_SIGN_STYLE=Manual \
+          CODE_SIGN_IDENTITY="iPhone Distribution: Carter Comeau (BQYSQ48JA9)" \  # Use full identity string for precision
+          PROVISIONING_PROFILE_SPECIFIER="$(/usr/libexec/PlistBuddy -c 'Print :UUID' decoded_profile.plist)" \
+          archive
 
     # ─── Export signed .ipa ────────────────────────────────────────────
     - name: Export .ipa
-        run: |
-          cat > ExportOptions.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-            <dict>
-              <key>method</key><string>ad-hoc</string>
-              <key>signingStyle</key><string>manual</string>
-              <key>signingCertificate</key><string>iPhone Distribution: Carter Comeau (BQYSQ48JA9)</string>
-              <key>provisioningProfiles</key>
-                <dict>
-                  <key>com.carter.bitchat</key><string>$(/usr/libexec/PlistBuddy -c 'Print :Name' decoded_profile.plist)</string>
-                </dict>
-            </dict>
-          </plist>
-          EOF
+      run: |
+        cat > ExportOptions.plist <<EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+          <dict>
+            <key>method</key><string>ad-hoc</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>iPhone Distribution: Carter Comeau (BQYSQ48JA9)</string>
+            <key>provisioningProfiles</key>
+              <dict>
+                <key>com.carter.bitchat</key><string>$(/usr/libexec/PlistBuddy -c 'Print :Name' decoded_profile.plist)</string>
+              </dict>
+          </dict>
+        </plist>
+        EOF
 
-          xcodebuild -exportArchive \
-            -archivePath $PWD/build/bitchat.xcarchive \
-            -exportPath $PWD/build/export \
-            -exportOptionsPlist ExportOptions.plist
+        xcodebuild -exportArchive \
+          -archivePath $PWD/build/bitchat.xcarchive \
+          -exportPath $PWD/build/export \
+          -exportOptionsPlist ExportOptions.plist
 
     - uses: actions/upload-artifact@v4
       with:
