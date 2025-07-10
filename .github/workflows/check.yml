@@ -71,6 +71,7 @@ jobs:
         # import the p12 (-A = allow all apps, -T codesign needed for Xcode)
         security import signing.p12 \
             -k "$KEYCHAIN" \
+            -f pkcs12 \
             -P "$IOS_CERT_PASSWORD" \
             -A -T /usr/bin/codesign
 
