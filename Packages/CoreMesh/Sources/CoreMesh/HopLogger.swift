@@ -3,6 +3,8 @@ import Foundation
 /// Keeps an in-memory count of how many times we’ve relayed a given message ID.
 public final class HopLogger {
 
+    public static let shared = HopLogger() 
+
     private var counts: [UUID: Int] = [:]
     private let lock = NSLock()          // thread-safe for future use
 

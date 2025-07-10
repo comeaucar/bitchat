@@ -17,6 +17,9 @@ import IOKit.ps
 import UIKit
 #endif
 
+import CoreMesh   // ✅ gives access to HopLogger, PacketTTL, etc.
+
+
 // Extension for hex encoding
 extension Data {
     func hexEncodedString() -> String {
@@ -2509,8 +2512,39 @@ extension BluetoothMeshService: CBPeripheralDelegate {
             }
         }
     }
+
+    private static func extractMessageUUID(from packet: Data) -> UUID? {
+    // If your existing binary protocol already encodes a UUID, parse it properly here.
+    // Temporary fallback: hash the packet (not ideal for prod).
+    if packet.count >= 16 {
+        return UUID(uuidString: SHA256hexPrefix(of: packet))
+    }
+    return nil
+}
+
+private static func SHA256hexPrefix(of data: Data) -> String {
+    #if canImport(CryptoKit)
+    import CryptoKit
+    let digest = SHA256.hash(data: data)
+    #else
+    import Crypto
+    let digest = Crypto.SHA256.hash(data: data)
+    #endif
+    // take first 16 hex chars → 8-4-4 template for a valid UUID
+    let hex = digest.map { String(format: "%02x", $0) }.joined()
+    let form = "\(hex.prefix(8))-\(hex.dropFirst(8).prefix(4))-\(hex.dropFirst(12).prefix(4))-\(hex.dropFirst(16).prefix(4))-\(hex.dropFirst(20).prefix(12))"
+    return form
+}
+
     
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+
+         if let uuid = Self.extractMessageUUID(from: data) {
+        HopLogger.shared.recordHop(messageID: uuid)
+        if let hops = HopLogger.shared.hops(for: uuid) {
+            print("🪄 HopLogger \(uuid) → hop \(hops)")
+        }
+    }
         guard let data = characteristic.value else {
             return
         }
