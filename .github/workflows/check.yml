@@ -30,3 +30,58 @@ jobs:
         set -o pipefail && xcodebuild test \
           -scheme bitchatTests_iOS \
           -destination "platform=iOS Simulator,name=iPhone 16" | xcpretty
+    # ─── Import signing materials ─────────────────────────────────────
+    - name: Decode signing assets
+      env:
+        P12:  ${{ secrets.IOS_CERT_P12_BASE64 }}
+        PROF: ${{ secrets.IOS_PROFILE_BASE64 }}
+      run: |
+        echo "$P12"  | base64 --decode > signing.p12
+        echo "$PROF" | base64 --decode > profile.mobileprovision
+        security create-keychain -p "" build.keychain
+        security import signing.p12 -k build.keychain -P "${{ secrets.IOS_CERT_PASSWORD }}" -T /usr/bin/codesign
+        security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
+        mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+        cp profile.mobileprovision ~/Library/MobileDevice/Provisioning\ Profiles/
+
+    # ─── Archive the app ───────────────────────────────────────────────
+    - name: Archive
+      run: |
+        xcodebuild -workspace bitchat.xcworkspace \
+          -scheme bitchatApp \
+          -configuration Release \
+          -archivePath $PWD/build/bitchat.xcarchive \
+          CODE_SIGN_STYLE=Manual \
+          CODE_SIGN_IDENTITY="iPhone Distribution" \
+          PROVISIONING_PROFILE_SPECIFIER="$(/usr/libexec/PlistBuddy -c 'Print :UUID' profile.mobileprovision)" \
+          archive | xcpretty
+
+    # ─── Export signed .ipa ────────────────────────────────────────────
+    - name: Export .ipa
+      run: |
+        cat > ExportOptions.plist <<EOF
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+          <dict>
+            <key>method</key><string>ad-hoc</string>        <!-- use 'development' or 'app-store' if you prefer -->
+            <key>signingStyle</key><string>manual</string>
+            <key>signingCertificate</key><string>iPhone Distribution</string>
+            <key>provisioningProfiles</key>
+              <dict>
+                <key>com.yourcompany.bitchat</key><string>$(/usr/libexec/PlistBuddy -c 'Print :Name' profile.mobileprovision)</string>
+              </dict>
+          </dict>
+        </plist>
+        EOF
+
+        xcodebuild -exportArchive \
+          -archivePath $PWD/build/bitchat.xcarchive \
+          -exportPath $PWD/build/export \
+          -exportOptionsPlist ExportOptions.plist | xcpretty
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: bitchat-ipa
+        path: build/export/*.ipa
+
