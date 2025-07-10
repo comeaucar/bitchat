@@ -52,7 +52,6 @@ jobs:
         openssl pkcs12 -in signing.p12 -nokeys \
           -passin pass:"$IOS_CERT_PASSWORD" \
           -info -nodes >/dev/null
-
     # ────────────────────────────────────────────────────────────────────
     # Only if the above succeeds will this import step run
     - name: Import certificate into temp keychain
