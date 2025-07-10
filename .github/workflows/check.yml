@@ -28,7 +28,8 @@ jobs:
     - name: Run iOS tests
       run: |
         set -o pipefail && xcodebuild test \
-          -scheme bitchatTests_iOS \
+          -project bitchat.xcodeproj \
+          -scheme "bitchat (iOS)" \
           -destination "platform=iOS Simulator,name=iPhone 16" | xcpretty
     # ─── Import signing materials ─────────────────────────────────────
     - name: Decode signing assets
@@ -47,8 +48,8 @@ jobs:
     # ─── Archive the app ───────────────────────────────────────────────
     - name: Archive
       run: |
-        xcodebuild -workspace bitchat.xcworkspace \
-          -scheme bitchatApp \
+        xcodebuild -project bitchat.xcodeproj \
+          -scheme "bitchat (iOS)" \
           -configuration Release \
           -archivePath $PWD/build/bitchat.xcarchive \
           CODE_SIGN_STYLE=Manual \
@@ -69,7 +70,7 @@ jobs:
             <key>signingCertificate</key><string>iPhone Distribution</string>
             <key>provisioningProfiles</key>
               <dict>
-                <key>com.yourcompany.bitchat</key><string>$(/usr/libexec/PlistBuddy -c 'Print :Name' profile.mobileprovision)</string>
+                <key>com.carter.bitchat</key><string>$(/usr/libexec/PlistBuddy -c 'Print :Name' profile.mobileprovision)</string>
               </dict>
           </dict>
         </plist>
