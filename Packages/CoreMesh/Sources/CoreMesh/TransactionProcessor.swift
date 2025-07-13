@@ -40,7 +40,7 @@ public final class TransactionProcessor {
     // MARK: - Transaction Processing
     
     /// Process a new transaction (validate, add to DAG, award rewards)
-    public func processTransaction(_ transaction: SignedRelayTx, isLocallyOriginated: Bool = false) throws {
+    public func processTransaction(_ transaction: SignedRelayTx, isLocallyOriginated: Bool = false, powResult: ProofOfWorkResult? = nil) throws {
         let txHash = transaction.transaction.id.hexString.prefix(8)
         print("🔄 Processing transaction \(txHash)...")
         
@@ -70,7 +70,18 @@ public final class TransactionProcessor {
                 throw error
             }
             
-            // 5. Award relay rewards
+            // 5. Award PoW rewards if locally originated with PoW
+            if isLocallyOriginated, let powResult = powResult {
+                do {
+                    try awardPoWReward(for: transaction, powResult: powResult)
+                    print("✅ Awarded PoW reward for transaction \(txHash)")
+                } catch {
+                    print("❌ Failed to award PoW reward for transaction \(txHash): \(error)")
+                    // Don't throw here - the transaction is still valid even if reward fails
+                }
+            }
+            
+            // 6. Award relay rewards
             do {
                 try awardRelayRewards(for: transaction, isLocallyOriginated: isLocallyOriginated)
                 print("✅ Awarded relay rewards for transaction \(txHash)")
@@ -80,7 +91,7 @@ public final class TransactionProcessor {
                 // This prevents the entire transaction from failing due to wallet issues
             }
             
-            // 6. Update statistics
+            // 7. Update statistics
             updateStatistics(transaction)
             
             print("✅ Processed transaction \(txHash) with fee \(transaction.transaction.feePerHop)µRLT")
@@ -225,6 +236,34 @@ public final class TransactionProcessor {
             // Re-throw the error so the caller can decide how to handle it
             throw error
         }
+    }
+    
+    /// Award PoW rewards for computing proof of work
+    /// - Parameters:
+    ///   - transaction: The transaction that required PoW
+    ///   - powResult: The proof of work result
+    private func awardPoWReward(for transaction: SignedRelayTx, powResult: ProofOfWorkResult) throws {
+        let feePerHop = transaction.transaction.feePerHop
+        let senderPubKey = transaction.transaction.senderPub
+        let keyHash = senderPubKey.rawRepresentation.prefix(8).hexEncodedString()
+        let txHash = transaction.transaction.id.hexString.prefix(8)
+        
+        // Award 80% of fee back as PoW reward (maintains 20% cost for spam protection)
+        let powRewardAmount = UInt64(feePerHop) * 80 / 100
+        
+        print("🔨 Awarding PoW reward: \(powRewardAmount)µRLT to \(keyHash) for transaction \(txHash)")
+        print("   Difficulty: \(powResult.difficulty), Compute time: \(String(format: "%.2f", powResult.computeTime))s")
+        
+        try walletManager.awardPoWReward(
+            to: senderPubKey,
+            amount: powRewardAmount,
+            transactionId: transaction.transaction.id,
+            computeTime: powResult.computeTime,
+            difficulty: powResult.difficulty
+        )
+        
+        totalRewardsAwarded += powRewardAmount
+        print("🔨 PoW reward awarded: \(powRewardAmount)µRLT to \(keyHash)")
     }
     
     /// Validate a transaction's signature and structure

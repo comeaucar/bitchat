@@ -85,7 +85,24 @@ message RelayTx {
 * ✅ Pruning rule: keep only ancestors ≤ `depth_window` (default = 1 000 tx)  
 * ❌ Snapshot export/import over Wi-Fi Direct for rapid sync
 
-### 4.4 Anchoring Protocol ✅ **IMPLEMENTED**
+### 4.4 Proof of Work System ✅ **IMPLEMENTED**
+**Network-Aware Difficulty Scaling:**
+```swift
+// Difficulty adjusts based on network conditions
+tokenValueMultiplier = max(1.0, tokenValue / 100.0)
+networkCongestionFactor = max(0.5, min(3.0, messagesPerSecond / 10.0))
+networkHashRate = activeNodes * 10.0
+
+adjustedTarget = baseTarget / (tokenValueMultiplier * congestionAdjustment * hashRateAdjustment)
+```
+
+**PoW Reward Economics:**
+- Users pay fee + compute PoW → receive 80% fee back as reward
+- Maintains 20% net cost for spam protection
+- Computational work contributes to network security
+- Creates sustainable circular economy between premium and PoW users
+
+### 4.5 Anchoring Protocol ✅ **IMPLEMENTED**
 1. Device computes Merkle root of current DAG tip-set.  
 2. Posts root to a selected *anchor network* when any internet link appears.  
 3. Peers accept longest-anchored sub-DAG during conflict resolution.
@@ -99,20 +116,44 @@ message RelayTx {
 | **Inflation** | 1 RLT minted *per hop* | Uncapped supply; value derives from utility. | ✅ **IMPLEMENTED** |
 | **Relay reward** | 100 % of hop fee | Paid instantly, spendable once anchored. | ✅ **IMPLEMENTED** |
 | **Base fee (µRLT)** | Adaptive EMA of last 1 000 hops | Broadcast via fee beacons. | ✅ **IMPLEMENTED** |
-| **Spam PoW** | Leading-zero hash, difficulty auto-scales | Only required when fee `< relayMinFee`. | ❌ **NOT IMPLEMENTED** |
+| **Spam PoW** | Leading-zero hash, difficulty auto-scales | Only required when fee `< relayMinFee`. | ✅ **IMPLEMENTED** |
 
 *Users may pre-fund wallets via on-chain bridge or earn RLT by relaying.*
 
 ### Current Economic Model ✅ **IMPLEMENTED**
-**Direct Messages (1 hop):**
-- Sender pays: Size fee (1000µRLT) + Hop fee (100µRLT) = 1100µRLT
-- Sender receives: 100µRLT reward
-- **Net cost: 1000µRLT** (effectively free hopping, only pay for message size)
 
-**Multi-hop Messages:**
-- Sender pays: Size fee + (Hop fee × TTL)
-- Sender receives: Hop fee × 1 (single reward)
-- **Net cost increases with distance** (incentivizes mesh density)
+The system now supports **three payment tiers** with different cost/speed tradeoffs:
+
+#### **🟢 Premium Tier (High-Fee Messages)**
+- **Payment**: 5000µRLT+ (≥ relay minimum fee)
+- **Delivery**: Instant, no PoW required
+- **Rewards**: None (pay for speed and convenience)
+- **Use case**: Time-sensitive messages, wealthy users
+
+#### **🟡 Balanced Tier (PoW Messages)**
+- **Payment**: 1000µRLT + Proof of Work computation
+- **Delivery**: 2-8 second delay for PoW computation
+- **Rewards**: 800µRLT PoW reward (80% fee back)
+- **Net cost**: 200µRLT (25x cheaper than premium)
+- **Use case**: Cost-conscious users willing to trade time for tokens
+
+#### **🔴 Economy Analysis**
+- **Spam protection**: Still costs 200µRLT per message
+- **Computational contribution**: PoW work strengthens network security
+- **Fair access**: All devices can participate regardless of economic status
+
+### **PoW Implementation Details** ✅ **IMPLEMENTED**
+
+**Network-Aware Difficulty Scaling:**
+- **Token value scaling**: Higher token value → higher difficulty
+- **Network congestion**: More traffic → higher difficulty  
+- **Hash rate adaptation**: More nodes → can handle higher difficulty
+- **Target time**: 2 seconds baseline, adjusted by network conditions
+
+**Multi-hop Behavior:**
+- **Direct messages (1 hop)**: Pay 1000µRLT + PoW, get 800µRLT back
+- **Multi-hop messages**: Pay base fee + (hop fee × TTL) + PoW, get 800µRLT back
+- **Net cost scales with distance** (incentivizes mesh density)
 
 ---
 
@@ -144,16 +185,19 @@ Background service throttles BLE advertising to remain within *15 % daily batter
 
 ### ✅ **Fully Implemented**
 - **Core DAG Infrastructure:** `DAGStorage.swift`, `TransactionProcessor.swift`
-- **Wallet System:** `WalletManager.swift` with SQLite persistence
+- **Wallet System:** `WalletManager.swift` with SQLite persistence and multiple transaction types
 - **Fee Calculation:** `FeeCalculator.swift` with adaptive pricing
 - **Packet Protocol:** `BitChatHeaderV2` with fee and transaction hash fields
 - **Transaction System:** `RelayTx` and `SignedRelayTx` with cryptographic validation
 - **CLI Tools:** `CLIExplorer.swift` for DAG inspection and debugging
-- **Token Minting:** 1 RLT minted per hop (currently awarded to sender)
+- **Token Minting:** 1 RLT minted per hop with proper reward distribution
 - **Local Consensus:** Transaction validation and DAG tip management
 - **Persistent Keys:** Device-specific transaction keys stored in Keychain
 - **Fee Beacons:** `FeeBeaconManager.swift` with Bluetooth advertisement via manufacturer data
 - **Relay Rewards:** `RewardDistributor.swift` with proper intermediate node reward distribution
+- **PoW System:** `ProofOfWork.swift` with network-aware difficulty scaling and partial rewards
+- **PoW Rewards:** 80% fee refund for computational work, maintaining spam protection
+- **Network Metrics:** Real-time tracking of network conditions for difficulty adjustment
 - **Budgeted Routing:** `RouteOptimizer.swift` with cost-based route selection and user preferences
 - **Anchoring Protocol:** `AnchoringService.swift` with Merkle root computation and external network posting
 - **Bridge Infrastructure:** `BridgeService.swift` with internet connectivity monitoring and bridge discovery
@@ -162,7 +206,6 @@ Background service throttles BLE advertising to remain within *15 % daily batter
 - **Global Consensus:** Anchoring infrastructure exists but limited to simulated external networks
 
 ### ❌ **Not Implemented**
-- **Proof of Work:** No spam protection for low-fee messages
 - **Snapshot Sync:** No DAG export/import for rapid synchronization
 - **Verified Relays:** No SecureEnclave/KeyStore attestation
 - **File Transfer:** No per-MB pricing or chunk receipts
@@ -180,12 +223,15 @@ Background service throttles BLE advertising to remain within *15 % daily batter
 | **4 – iOS Port** | 6 weeks | MultipeerConnectivity + shared Rust core. | ⚠️ **PARTIAL** (iOS native, no Rust) |
 | **5 – File-Transfer** | TBD | Per-MB pricing, chunk receipts. | ❌ **NOT STARTED** |
 
+### **Recently Completed**
+- **Proof of Work** - Network-aware spam protection with partial reward system ✅ **COMPLETED**
+
 ### **Next Priority Features**
-1. **Proof of Work** - Spam protection for low-fee messages with leading-zero hash requirements
-2. **Snapshot Sync** - DAG export/import for rapid synchronization over Wi-Fi Direct
-3. **Verified Relays** - SecureEnclave/KeyStore attestation for trusted relay tier
-4. **File Transfer** - Per-MB pricing and chunk receipts for large file transfers
-5. **Real Anchoring** - Actual Bitcoin testnet or Nostr relay integration (currently simulated)
+1. **Snapshot Sync** - DAG export/import for rapid synchronization over Wi-Fi Direct
+2. **Verified Relays** - SecureEnclave/KeyStore attestation for trusted relay tier
+3. **File Transfer** - Per-MB pricing and chunk receipts for large file transfers
+4. **Real Anchoring** - Actual Bitcoin testnet or Nostr relay integration (currently simulated)
+5. **Advanced PoW Features** - Device capability attestation, dynamic reward scaling
 
 ---
 
@@ -194,7 +240,7 @@ Background service throttles BLE advertising to remain within *15 % daily batter
 | Risk | Impact | Mitigation | Status |
 |------|--------|-----------|--------|
 | Battery drain | User churn | Strict duty-cycle caps; PoW disabled < 30 % battery. | ✅ **IMPLEMENTED** |
-| Spam / DDoS | Network congestion | Minimum fee + PoW; relays blacklist offenders locally. | ⚠️ **PARTIAL** (fees only) |
+| Spam / DDoS | Network congestion | Minimum fee + PoW; relays blacklist offenders locally. | ✅ **IMPLEMENTED** |
 | Regulatory | App-store rejection | Opt-out "no-token" mode; classify as utility token. | ❌ **NOT IMPLEMENTED** |
 | Ledger bloat | Storage exhaustion | Depth-window pruning + snapshot compression. | ⚠️ **PARTIAL** (pruning only) |
 

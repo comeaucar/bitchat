@@ -1032,14 +1032,16 @@ class ChatViewModel: ObservableObject {
                     // First, deduct the fee from sender's wallet
                     try walletManager.spendTokens(
                         from: senderKey.publicKey,
-                        amount: UInt64(feeCalculation.hopFee),
+                        amount: UInt64(feeCalculation.totalFee),
                         transactionId: transaction.transaction.id,
                         description: "Message fee (broadcast)"
                     )
-                    print("💸 Deducted \(feeCalculation.hopFee)µRLT fee from sender wallet")
+                    print("💸 Deducted \(feeCalculation.totalFee)µRLT fee from sender wallet")
                     
                     // Process the transaction to add it to DAG
-                    try processor.processTransaction(transaction, isLocallyOriginated: true)
+                    // Pass PoW result if available for reward calculation
+                    let powResult = meshService.getLastPoWResult()
+                    try processor.processTransaction(transaction, isLocallyOriginated: true, powResult: powResult)
                     
                     // Notify UI about wallet update
                     notifyWalletUpdated()
@@ -1146,14 +1148,16 @@ class ChatViewModel: ObservableObject {
                 // First, deduct the fee from sender's wallet
                 try walletManager.spendTokens(
                     from: senderKey.publicKey,
-                    amount: UInt64(feeCalculation.hopFee),
+                    amount: UInt64(feeCalculation.totalFee),
                     transactionId: transaction.transaction.id,
                     description: "Message fee (private)"
                 )
-                print("💸 Deducted \(feeCalculation.hopFee)µRLT fee from sender wallet")
+                print("💸 Deducted \(feeCalculation.totalFee)µRLT fee from sender wallet")
                 
                 // Process the transaction to add it to DAG
-                try processor.processTransaction(transaction, isLocallyOriginated: true)
+                // Pass PoW result if available for reward calculation
+                let powResult = meshService.getLastPoWResult()
+                try processor.processTransaction(transaction, isLocallyOriginated: true, powResult: powResult)
                 
                 // Notify UI about wallet update
                 notifyWalletUpdated()

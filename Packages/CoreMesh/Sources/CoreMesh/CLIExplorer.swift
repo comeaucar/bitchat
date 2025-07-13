@@ -173,15 +173,22 @@ public class CLIExplorer {
         let stats = proofOfWork.getStatistics()
         
         print("Current Difficulty: \(stats.currentDifficulty) leading zeros")
-        print("Target Compute Time: \(String(format: "%.1f", stats.targetComputeTime))s")
+        print("Base Target Time: \(String(format: "%.1f", stats.targetComputeTime))s")
+        print("Network-Aware Target: \(String(format: "%.1f", stats.networkAwareTargetTime))s")
         print("Average Compute Time: \(String(format: "%.2f", stats.averageComputeTime))s")
         print("Total Computations: \(stats.totalComputations)")
         
+        // Network conditions
+        print("\n🌐 Network Conditions:")
+        print("Token Value Multiplier: \(String(format: "%.2f", stats.tokenValueMultiplier))x")
+        print("Network Congestion: \(String(format: "%.2f", stats.networkCongestionFactor))x")
+        print("Network Hash Rate: \(String(format: "%.1f", stats.networkHashRate)) H/s")
+        
         // Performance indicator
         let performance: String
-        if stats.averageComputeTime < stats.targetComputeTime * 0.8 {
+        if stats.averageComputeTime < stats.networkAwareTargetTime * 0.8 {
             performance = "🟢 Fast (difficulty may increase)"
-        } else if stats.averageComputeTime > stats.targetComputeTime * 1.5 {
+        } else if stats.averageComputeTime > stats.networkAwareTargetTime * 1.5 {
             performance = "🔴 Slow (difficulty may decrease)"
         } else {
             performance = "🟡 Balanced"
@@ -191,6 +198,7 @@ public class CLIExplorer {
         if stats.totalComputations == 0 {
             print("\n💡 No PoW computations performed yet")
             print("   PoW is only required when message fee < relay minimum fee")
+            print("   💰 PoW rewards: Users get 80% of fee back for computational work")
         }
     }
     

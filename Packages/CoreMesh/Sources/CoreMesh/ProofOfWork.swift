@@ -12,12 +12,18 @@ public final class ProofOfWork {
     
     /// Difficulty adjustment parameters
     private let minDifficulty: UInt8 = 1
-    private let maxDifficulty: UInt8 = 6
+    private let maxDifficulty: UInt8 = 8
     private let targetComputeTime: TimeInterval = 2.0 // Target 2 seconds
-    private let difficultyAdjustmentWindow = 100 // Adjust every 100 PoW computations
+    private let difficultyAdjustmentWindow = 50 // Adjust every 50 PoW computations
+    
+    /// Network-aware difficulty scaling
+    private var networkHashRate: Double = 0.0
+    private var tokenValueMultiplier: Double = 1.0
+    private var networkCongestionFactor: Double = 1.0
     
     /// Statistics for difficulty adjustment
     private var powComputations: [TimeInterval] = []
+    private var networkMetrics: [NetworkMetric] = []
     private let statisticsLock = NSLock()
     
     public init() {}
@@ -140,12 +146,18 @@ public final class ProofOfWork {
         statisticsLock.lock()
         defer { statisticsLock.unlock() }
         
+        let networkAwareTargetTime = calculateNetworkAwareTargetTime()
+        
         guard !powComputations.isEmpty else {
             return ProofOfWorkStatistics(
                 currentDifficulty: currentDifficulty,
                 averageComputeTime: 0,
                 totalComputations: 0,
-                targetComputeTime: targetComputeTime
+                targetComputeTime: targetComputeTime,
+                networkAwareTargetTime: networkAwareTargetTime,
+                tokenValueMultiplier: tokenValueMultiplier,
+                networkCongestionFactor: networkCongestionFactor,
+                networkHashRate: networkHashRate
             )
         }
         
@@ -155,7 +167,11 @@ public final class ProofOfWork {
             currentDifficulty: currentDifficulty,
             averageComputeTime: averageTime,
             totalComputations: powComputations.count,
-            targetComputeTime: targetComputeTime
+            targetComputeTime: targetComputeTime,
+            networkAwareTargetTime: networkAwareTargetTime,
+            tokenValueMultiplier: tokenValueMultiplier,
+            networkCongestionFactor: networkCongestionFactor,
+            networkHashRate: networkHashRate
         )
     }
     
@@ -204,26 +220,80 @@ public final class ProofOfWork {
         }
     }
     
-    /// Adjust difficulty based on recent computation times
+    /// Adjust difficulty based on network conditions and token value
     private func adjustDifficulty() {
         let averageTime = powComputations.reduce(0, +) / Double(powComputations.count)
         
+        // Calculate network-aware target time
+        let networkAwareTargetTime = calculateNetworkAwareTargetTime()
+        
         let oldDifficulty = currentDifficulty
         
-        if averageTime < targetComputeTime * 0.5 && currentDifficulty < maxDifficulty {
-            // Too fast, increase difficulty
+        if averageTime < networkAwareTargetTime * 0.6 && currentDifficulty < maxDifficulty {
+            // Too fast considering network conditions, increase difficulty
             currentDifficulty += 1
-            print("📈 PoW difficulty increased to \(currentDifficulty) (avg time: \(String(format: "%.2f", averageTime))s)")
-        } else if averageTime > targetComputeTime * 2.0 && currentDifficulty > minDifficulty {
-            // Too slow, decrease difficulty
+            print("📈 PoW difficulty increased to \(currentDifficulty) (avg: \(String(format: "%.2f", averageTime))s, target: \(String(format: "%.2f", networkAwareTargetTime))s)")
+        } else if averageTime > networkAwareTargetTime * 1.8 && currentDifficulty > minDifficulty {
+            // Too slow considering network conditions, decrease difficulty
             currentDifficulty -= 1
-            print("📉 PoW difficulty decreased to \(currentDifficulty) (avg time: \(String(format: "%.2f", averageTime))s)")
+            print("📉 PoW difficulty decreased to \(currentDifficulty) (avg: \(String(format: "%.2f", averageTime))s, target: \(String(format: "%.2f", networkAwareTargetTime))s)")
         }
         
         // Clear statistics when difficulty changes
         if oldDifficulty != currentDifficulty {
             powComputations.removeAll()
         }
+    }
+    
+    /// Calculate network-aware target time based on conditions and token value
+    private func calculateNetworkAwareTargetTime() -> TimeInterval {
+        let baseTarget = targetComputeTime
+        
+        // Adjust for token value - as tokens become more valuable, increase difficulty
+        let tokenValueAdjustment = tokenValueMultiplier
+        
+        // Adjust for network congestion - more congestion = higher difficulty
+        let congestionAdjustment = networkCongestionFactor
+        
+        // Adjust for network hash rate - higher hash rate = can handle higher difficulty
+        let hashRateAdjustment = max(0.5, min(2.0, networkHashRate / 100.0))
+        
+        let adjustedTarget = baseTarget / (tokenValueAdjustment * congestionAdjustment * hashRateAdjustment)
+        
+        return max(0.5, min(10.0, adjustedTarget)) // Clamp between 0.5s and 10s
+    }
+    
+    /// Update network metrics for difficulty adjustment
+    public func updateNetworkMetrics(activeNodes: Int, messagesPerSecond: Double, tokenValue: Double) {
+        statisticsLock.lock()
+        defer { statisticsLock.unlock() }
+        
+        // Update token value multiplier (higher value = higher difficulty)
+        tokenValueMultiplier = max(1.0, tokenValue / 100.0) // Assume 100µRLT baseline
+        
+        // Update network congestion factor
+        networkCongestionFactor = max(0.5, min(3.0, messagesPerSecond / 10.0)) // Assume 10 msg/s baseline
+        
+        // Update network hash rate estimate
+        networkHashRate = Double(activeNodes) * 10.0 // Rough estimate: 10 hash/s per node
+        
+        // Record network metric
+        let metric = NetworkMetric(
+            timestamp: Date(),
+            activeNodes: activeNodes,
+            messagesPerSecond: messagesPerSecond,
+            tokenValue: tokenValue,
+            difficulty: currentDifficulty
+        )
+        
+        networkMetrics.append(metric)
+        
+        // Keep only recent metrics
+        if networkMetrics.count > 100 {
+            networkMetrics.removeFirst()
+        }
+        
+        print("🌐 Network metrics updated: \(activeNodes) nodes, \(String(format: "%.1f", messagesPerSecond)) msg/s, \(String(format: "%.0f", tokenValue))µRLT value")
     }
 }
 
@@ -274,17 +344,42 @@ public struct ProofOfWorkStatistics {
     public let averageComputeTime: TimeInterval
     public let totalComputations: Int
     public let targetComputeTime: TimeInterval
+    public let networkAwareTargetTime: TimeInterval
+    public let tokenValueMultiplier: Double
+    public let networkCongestionFactor: Double
+    public let networkHashRate: Double
     
-    public init(currentDifficulty: UInt8, averageComputeTime: TimeInterval, totalComputations: Int, targetComputeTime: TimeInterval) {
+    public init(currentDifficulty: UInt8, averageComputeTime: TimeInterval, totalComputations: Int, targetComputeTime: TimeInterval, networkAwareTargetTime: TimeInterval, tokenValueMultiplier: Double, networkCongestionFactor: Double, networkHashRate: Double) {
         self.currentDifficulty = currentDifficulty
         self.averageComputeTime = averageComputeTime
         self.totalComputations = totalComputations
         self.targetComputeTime = targetComputeTime
+        self.networkAwareTargetTime = networkAwareTargetTime
+        self.tokenValueMultiplier = tokenValueMultiplier
+        self.networkCongestionFactor = networkCongestionFactor
+        self.networkHashRate = networkHashRate
     }
     
     /// Human-readable description
     public var description: String {
-        return "PoW Stats: difficulty \(currentDifficulty), avg time \(String(format: "%.2f", averageComputeTime))s, \(totalComputations) computations"
+        return "PoW Stats: difficulty \(currentDifficulty), avg time \(String(format: "%.2f", averageComputeTime))s, target \(String(format: "%.2f", networkAwareTargetTime))s, \(totalComputations) computations"
+    }
+}
+
+/// Network metric for difficulty adjustment
+public struct NetworkMetric {
+    public let timestamp: Date
+    public let activeNodes: Int
+    public let messagesPerSecond: Double
+    public let tokenValue: Double
+    public let difficulty: UInt8
+    
+    public init(timestamp: Date, activeNodes: Int, messagesPerSecond: Double, tokenValue: Double, difficulty: UInt8) {
+        self.timestamp = timestamp
+        self.activeNodes = activeNodes
+        self.messagesPerSecond = messagesPerSecond
+        self.tokenValue = tokenValue
+        self.difficulty = difficulty
     }
 }
 

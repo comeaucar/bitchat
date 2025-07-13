@@ -468,6 +468,93 @@ public final class WalletManager {
         }
     }
     
+    /// Award PoW rewards to a wallet
+    public func awardPoWReward(
+        to publicKey: CryptoCurve25519.Signing.PublicKey,
+        amount: UInt64,
+        transactionId: SHA256Digest,
+        computeTime: TimeInterval,
+        difficulty: UInt8
+    ) throws {
+        let description = "PoW reward (difficulty: \(difficulty), time: \(String(format: "%.2f", computeTime))s)"
+        try awardRewardWithType(to: publicKey, amount: amount, transactionId: transactionId, type: .powReward, description: description)
+    }
+    
+    /// Award network contribution rewards to a wallet
+    public func awardNetworkContribution(
+        to publicKey: CryptoCurve25519.Signing.PublicKey,
+        amount: UInt64,
+        transactionId: SHA256Digest,
+        contributionType: String
+    ) throws {
+        let description = "Network contribution: \(contributionType)"
+        try awardRewardWithType(to: publicKey, amount: amount, transactionId: transactionId, type: .networkContribution, description: description)
+    }
+    
+    /// Generic reward awarding method
+    private func awardRewardWithType(
+        to publicKey: CryptoCurve25519.Signing.PublicKey,
+        amount: UInt64,
+        transactionId: SHA256Digest,
+        type: WalletTransactionType,
+        description: String
+    ) throws {
+        try queue.sync {
+            // Begin transaction
+            sqlite3_exec(db, "BEGIN TRANSACTION", nil, nil, nil)
+            
+            do {
+                // Ensure wallet exists (using unsafe version to avoid deadlock)
+                try createWalletUnsafe(for: publicKey)
+                
+                // Update balance
+                let updateQuery = """
+                    UPDATE wallets 
+                    SET balance_micro_rlt = balance_micro_rlt + ?, last_updated = ?
+                    WHERE public_key = ?
+                """
+                
+                var stmt: OpaquePointer?
+                guard sqlite3_prepare_v2(db, updateQuery, -1, &stmt, nil) == SQLITE_OK else {
+                    throw WalletError.databaseError("Failed to prepare balance update")
+                }
+                
+                defer { sqlite3_finalize(stmt) }
+                
+                let pubKeyData = publicKey.rawRepresentation
+                let timestamp = Int64(Date().timeIntervalSince1970)
+                
+                sqlite3_bind_int64(stmt, 1, Int64(amount))
+                sqlite3_bind_int64(stmt, 2, timestamp)
+                sqlite3_bind_blob(stmt, 3, pubKeyData.withUnsafeBytes { $0.baseAddress }, Int32(pubKeyData.count), nil)
+                
+                guard sqlite3_step(stmt) == SQLITE_DONE else {
+                    throw WalletError.databaseError("Failed to update balance")
+                }
+                
+                // Record transaction
+                try recordTransaction(
+                    publicKey: publicKey,
+                    transactionId: transactionId,
+                    amount: amount,
+                    type: type,
+                    description: description
+                )
+                
+                // Commit transaction
+                sqlite3_exec(db, "COMMIT", nil, nil, nil)
+                
+                let balanceStr = String(format: "%.6f", Double(amount) / 1_000_000)
+                let rewardType = type == .powReward ? "🔨 PoW" : type == .networkContribution ? "🌐 Network" : "🏆 Relay"
+                print("\(rewardType) reward: \(amount)µRLT (\(balanceStr)RLT) to \(publicKey.rawRepresentation.prefix(8).hexEncodedString())")
+                
+            } catch {
+                sqlite3_exec(db, "ROLLBACK", nil, nil, nil)
+                throw error
+            }
+        }
+    }
+    
     /// Spend tokens from a wallet
     public func spendTokens(
         from publicKey: CryptoCurve25519.Signing.PublicKey,
@@ -848,6 +935,8 @@ public struct WalletTransaction {
 
 public enum WalletTransactionType: String, CaseIterable {
     case reward = "reward"
+    case powReward = "pow_reward"
+    case networkContribution = "network_contribution"
     case spend = "spend"
     case unknown = "unknown"
 }

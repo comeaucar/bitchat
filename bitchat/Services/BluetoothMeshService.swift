@@ -95,6 +95,15 @@ class BluetoothMeshService: NSObject {
     
     // Transaction processing is now handled by ChatViewModel
     
+    // Track PoW results for reward calculation
+    private var lastPoWResult: ProofOfWorkResult?
+    private let powResultLock = NSLock()
+    
+    // Network metrics for PoW difficulty adjustment
+    private var networkMetricsTimer: Timer?
+    private var messagesReceivedCount: Int = 0
+    private var lastNetworkMetricsUpdate = Date()
+    
     // Peer list update debouncing
     private var peerListUpdateTimer: Timer?
     private let peerListUpdateDebounceInterval: TimeInterval = 0.1  // 100ms debounce for more responsive updates
@@ -387,6 +396,9 @@ class BluetoothMeshService: NSObject {
         
         // Setup battery optimizer
         setupBatteryOptimizer()
+        
+        // Start network metrics tracking for PoW difficulty adjustment
+        scheduleNetworkMetricsUpdate()
         
         // Start cover traffic for privacy
         startCoverTraffic()
@@ -1593,6 +1605,9 @@ class BluetoothMeshService: NSObject {
                         }
                         
                         DispatchQueue.main.async {
+                            // Track message for network metrics
+                            self.trackMessageReceived()
+                            
                             self.delegate?.didReceiveMessage(messageWithPeerID)
                         }
                         
@@ -1721,6 +1736,9 @@ class BluetoothMeshService: NSObject {
                         }
                         
                         DispatchQueue.main.async {
+                            // Track message for network metrics
+                            self.trackMessageReceived()
+                            
                             self.delegate?.didReceiveMessage(messageWithPeerID)
                         }
                         
@@ -3283,6 +3301,12 @@ extension BluetoothMeshService {
         )
         
         print("✅ PoW computed: nonce \(powResult.nonce), difficulty \(powResult.difficulty)")
+        
+        // Store PoW result for reward calculation
+        powResultLock.lock()
+        lastPoWResult = powResult
+        powResultLock.unlock()
+        
         return powResult
     }
     
@@ -3358,4 +3382,52 @@ extension BluetoothMeshService {
     }
     
     // Transaction creation is now handled by ChatViewModel to avoid duplication
+    
+    /// Get the last PoW result for reward calculation
+    public func getLastPoWResult() -> ProofOfWorkResult? {
+        powResultLock.lock()
+        let result = lastPoWResult
+        lastPoWResult = nil // Clear after use to avoid double rewards
+        powResultLock.unlock()
+        return result
+    }
+    
+    /// Schedule network metrics updates for PoW difficulty adjustment
+    private func scheduleNetworkMetricsUpdate() {
+        networkMetricsTimer?.invalidate()
+        networkMetricsTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+            self?.updateNetworkMetrics()
+        }
+    }
+    
+    /// Update network metrics for PoW difficulty adjustment
+    private func updateNetworkMetrics() {
+        let currentTime = Date()
+        let timeSinceLastUpdate = currentTime.timeIntervalSince(lastNetworkMetricsUpdate)
+        
+        // Calculate messages per second
+        let messagesPerSecond = Double(messagesReceivedCount) / timeSinceLastUpdate
+        
+        // Get current network size
+        let activeNodes = max(1, activePeers.count + 1) // +1 for self
+        
+        // Estimate token value based on network activity (simplified)
+        let tokenValue = max(100.0, 100.0 + (messagesPerSecond * 10.0))
+        
+        // Update PoW difficulty based on network conditions
+        proofOfWork.updateNetworkMetrics(
+            activeNodes: activeNodes,
+            messagesPerSecond: messagesPerSecond,
+            tokenValue: tokenValue
+        )
+        
+        // Reset counters
+        messagesReceivedCount = 0
+        lastNetworkMetricsUpdate = currentTime
+    }
+    
+    /// Track message received for network metrics
+    private func trackMessageReceived() {
+        messagesReceivedCount += 1
+    }
 }
