@@ -73,6 +73,10 @@ class ChatViewModel: ObservableObject {
     @Published var currentBridge: BridgeNode? = nil
     @Published var connectivityStats: ConnectivityStatistics?
     
+    // File transfer support
+    @Published var showFileTransferRequest = false
+    @Published var pendingFileTransferRequest: FileTransferRequest? = nil
+    
     let meshService = BluetoothMeshService()
     private let feeCalculator = FeeCalculator()
     
@@ -117,6 +121,9 @@ class ChatViewModel: ObservableObject {
     private lazy var bridgeService: BridgeService = {
         return BridgeService()
     }()
+    
+    // File transfer manager
+    @Published var fileTransferManager: FileTransferManager = FileTransferManager()
     private let userDefaults = UserDefaults.standard
     private let nicknameKey = "bitchat.nickname"
     private let favoritesKey = "bitchat.favorites"
@@ -148,6 +155,9 @@ class ChatViewModel: ObservableObject {
         // Load saved channels state
         savedChannels = MessageRetentionService.shared.getFavoriteChannels()
         meshService.delegate = self
+        
+        // Set up file transfer manager
+        fileTransferManager.setMeshService(meshService)
         
         // Log startup info
         
@@ -3722,6 +3732,59 @@ extension ChatViewModel: BitchatDelegate {
         }
         
         return totalTime / Double(confirmedAnchors.count)
+    }
+    
+    // MARK: - File Transfer Delegate Methods
+    
+    func didReceiveFileTransferRequest(_ request: FileTransferRequest) {
+        DispatchQueue.main.async { [weak self] in
+            self?.pendingFileTransferRequest = request
+            self?.showFileTransferRequest = true
+        }
+    }
+    
+    func didReceiveFileTransferResponse(_ response: FileTransferResponse) {
+        // Already handled by FileTransferManager
+    }
+    
+    func didReceiveFileChunk(_ chunk: FileChunk) {
+        // Already handled by FileTransferManager
+    }
+    
+    func didReceiveFileChunkAck(_ ack: FileChunkAck) {
+        // Already handled by FileTransferManager
+    }
+    
+    func didReceiveFileTransferComplete(_ completion: FileTransferComplete) {
+        // Show system message about completed transfer
+        DispatchQueue.main.async { [weak self] in
+            let statusText = completion.success ? "completed successfully" : "failed"
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: "File transfer \(completion.transferID.prefix(8)) \(statusText)",
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+    
+    func didReceiveFileTransferCancel(_ cancellation: FileTransferCancel) {
+        // Show system message about cancelled transfer
+        DispatchQueue.main.async { [weak self] in
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: "File transfer \(cancellation.transferID.prefix(8)) cancelled: \(cancellation.reason)",
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+    
+    func didUpdateFileTransferStatus(_ transferID: String, status: FileTransferStatus) {
+        // Status updates are handled by the FileTransferManager's @Published properties
+        // The UI will automatically update through ObservableObject
     }
     
 }

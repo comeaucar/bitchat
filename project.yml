@@ -34,6 +34,9 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSBluetoothAlwaysUsageDescription: bitchat uses Bluetooth to create a secure mesh network for chatting with nearby users.
         NSBluetoothPeripheralUsageDescription: bitchat uses Bluetooth to discover and connect with other bitchat users nearby.
+        LSSupportsOpeningDocumentsInPlace: true
+        UIFileSharingEnabled: true
+        NSDocumentPickerUsageDescription: bitchat needs access to files to enable file transfers over the mesh network.
         UIBackgroundModes:
           - bluetooth-central
           - bluetooth-peripheral
@@ -52,6 +55,22 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLSchemes:
               - bitchat
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: All Files
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.data
+              - public.content
+              - public.image
+              - public.movie
+              - public.audio
+              - public.text
+        UTImportedTypeDeclarations:
+          - UTTypeIdentifier: public.data
+            UTTypeDescription: Data
+            UTTypeConformsTo:
+              - public.data
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.carter.bitchat
       PRODUCT_NAME: bitchat

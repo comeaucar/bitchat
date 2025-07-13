@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @EnvironmentObject var viewModel: ChatViewModel
@@ -28,6 +29,8 @@ struct ContentView: View {
     @State private var commandSuggestions: [String] = []
     @State private var showLeaveChannelAlert = false
     @State private var showWalletView = false
+    @State private var showFileTransferView = false
+    @State private var showFilePicker = false
     
     private var backgroundColor: Color {
         colorScheme == .dark ? Color.black : Color.white
@@ -125,6 +128,17 @@ struct ContentView: View {
             WalletView()
                 .environmentObject(viewModel)
         }
+        .sheet(isPresented: $showFileTransferView) {
+            FileTransferView(viewModel: viewModel)
+        }
+        .sheet(isPresented: Binding(
+            get: { viewModel.showFileTransferRequest },
+            set: { viewModel.showFileTransferRequest = $0 }
+        )) {
+            if let request = viewModel.pendingFileTransferRequest {
+                FileTransferRequestView(request: request, viewModel: viewModel)
+            }
+        }
         .alert("Set Channel Password", isPresented: $showPasswordInput) {
             SecureField("Password", text: $passwordInput)
             Button("Cancel", role: .cancel) {
@@ -169,6 +183,13 @@ struct ContentView: View {
             Button("OK", role: .cancel) { }
         } message: {
             Text("The password you entered is incorrect. Please try again.")
+        }
+        .fileImporter(
+            isPresented: $showFilePicker,
+            allowedContentTypes: [.data, .image, .movie, .audio, .text, .pdf],
+            allowsMultipleSelection: false
+        ) { result in
+            handleFileSelection(result)
         }
     }
     
@@ -714,6 +735,19 @@ struct ContentView: View {
                     sendMessage()
                 }
             
+            // File attachment button - only show for private chats or channels
+            if viewModel.selectedPrivateChatPeer != nil || viewModel.currentChannel != nil {
+                Button(action: {
+                    showFilePicker = true
+                }) {
+                    Image(systemName: "paperclip")
+                        .font(.system(size: 16))
+                        .foregroundColor(textColor)
+                }
+                .buttonStyle(.plain)
+                .help("Send file")
+            }
+            
             Button(action: sendMessage) {
                 Image(systemName: "arrow.up.circle.fill")
                     .font(.system(size: 20))
@@ -736,6 +770,159 @@ struct ContentView: View {
     private func sendMessage() {
         viewModel.sendMessage(messageText)
         messageText = ""
+    }
+    
+    private func handleFileSelection(_ result: Result<[URL], Error>) {
+        print("📎 *** handleFileSelection called ***")
+        switch result {
+        case .success(let urls):
+            print("📎 File selection successful, URLs: \(urls)")
+            guard let url = urls.first else { 
+                print("📎 ❌ No URL in selection")
+                return 
+            }
+            print("📎 Selected file URL: \(url)")
+            
+            // Determine recipient
+            let recipientID: String
+            if let privatePeer = viewModel.selectedPrivateChatPeer {
+                recipientID = privatePeer
+            } else if let channel = viewModel.currentChannel {
+                // For channel files, we need to pick a specific peer
+                // For now, let's show an alert to pick a recipient
+                showChannelFileRecipientPicker(for: url, in: channel)
+                return
+            } else {
+                return // No valid recipient
+            }
+            
+            Task {
+                do {
+                    print("📎 File selected: \(url.path)")
+                    print("📎 URL scheme: \(url.scheme ?? "none")")
+                    print("📎 URL isFileURL: \(url.isFileURL)")
+                    
+                    // Always try to start accessing security scoped resource
+                    let accessing = url.startAccessingSecurityScopedResource()
+                    defer {
+                        if accessing {
+                            url.stopAccessingSecurityScopedResource()
+                        }
+                    }
+                    
+                    print("📎 Security scoped access: \(accessing)")
+                    
+                    // Check file existence and readability
+                    let fileManager = FileManager.default
+                    guard fileManager.fileExists(atPath: url.path) else {
+                        throw FileTransferError.invalidFileData
+                    }
+                    
+                    // Check if we can read the file
+                    guard fileManager.isReadableFile(atPath: url.path) else {
+                        throw FileTransferError.invalidFileData
+                    }
+                    
+                    print("📎 File exists and is readable")
+                    
+                    // Try to get file attributes first
+                    let attributes = try fileManager.attributesOfItem(atPath: url.path)
+                    let fileSize = attributes[.size] as? UInt64 ?? 0
+                    let fileName = url.lastPathComponent
+                    
+                    print("📎 File attributes - name: \(fileName), size: \(fileSize)")
+                    
+                    // Read file data
+                    let fileData = try Data(contentsOf: url)
+                    print("📎 Successfully read \(fileData.count) bytes")
+                    
+                    // Create a temporary file in the app's documents directory
+                    let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+                    let tempDir = documentsPath.appendingPathComponent("temp_uploads")
+                    try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+                    
+                    // Create a unique filename to avoid conflicts
+                    let timestamp = Int(Date().timeIntervalSince1970)
+                    let uniqueFileName = "\(timestamp)_\(fileName)"
+                    let tempFileURL = tempDir.appendingPathComponent(uniqueFileName)
+                    
+                    // Write file with proper attributes
+                    try fileData.write(to: tempFileURL, options: [.atomic])
+                    
+                    // Set proper file permissions
+                    try FileManager.default.setAttributes([
+                        .posixPermissions: 0o644
+                    ], ofItemAtPath: tempFileURL.path)
+                    
+                    print("📎 Created temp file at: \(tempFileURL.path) with \(fileData.count) bytes")
+                    
+                    // Now initiate transfer with the file data directly (bypassing file system)
+                    print("📎 *** CALLING FileTransferManager.initiateFileTransfer ***")
+                    print("📎 - filePath: \(tempFileURL.path)")
+                    print("📎 - recipientID: \(recipientID)")
+                    print("📎 - fileData: \(fileData.count) bytes")
+                    print("📎 - fileName: \(fileName)")
+                    
+                    let transferID = try await viewModel.fileTransferManager.initiateFileTransfer(
+                        filePath: tempFileURL.path,
+                        recipientID: recipientID,
+                        fileData: fileData
+                    )
+                    
+                    print("📎 *** FILE TRANSFER INITIATED SUCCESSFULLY ***")
+                    print("📎 - transferID: \(transferID)")
+                    
+                    await MainActor.run {
+                        // Show system message about file transfer
+                        let systemMessage = BitchatMessage(
+                            sender: "system",
+                            content: "📎 Initiating file transfer: \(fileName) (\(formatFileSize(fileSize))) → \(transferID.prefix(8))",
+                            timestamp: Date(),
+                            isRelay: false
+                        )
+                        viewModel.messages.append(systemMessage)
+                    }
+                    
+                    // Clean up temp file after a delay
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 300) { // 5 minutes
+                        try? FileManager.default.removeItem(at: tempFileURL)
+                    }
+                    
+                } catch {
+                    print("📎 File transfer error: \(error)")
+                    await MainActor.run {
+                        let errorMessage = (error as? FileTransferError)?.localizedDescription ?? error.localizedDescription
+                        showFileAlert("Failed to start transfer: \(errorMessage)")
+                    }
+                }
+            }
+            
+        case .failure(let error):
+            showFileAlert("File selection failed: \(error.localizedDescription)")
+        }
+    }
+    
+    private func formatFileSize(_ bytes: UInt64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.allowedUnits = [.useMB, .useKB, .useBytes]
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: Int64(bytes))
+    }
+    
+    private func showChannelFileRecipientPicker(for url: URL, in channel: String) {
+        // For now, just show an alert saying file transfers in channels need a specific recipient
+        showFileAlert("For channel file transfers, please start a private chat with the recipient first")
+    }
+    
+    private func showFileAlert(_ message: String) {
+        // Show system message with the alert
+        let systemMessage = BitchatMessage(
+            sender: "system",
+            content: "📎 \(message)",
+            timestamp: Date(),
+            isRelay: false
+        )
+        viewModel.messages.append(systemMessage)
     }
     
     @ViewBuilder
@@ -907,6 +1094,46 @@ struct ContentView: View {
                             .foregroundColor(textColor)
                         
                         Spacer()
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12))
+                            .foregroundColor(secondaryTextColor)
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Color.clear)
+                
+                // File Transfers button
+                Button(action: {
+                    showFileTransferView = true
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        showSidebar = false
+                        sidebarDragOffset = 0
+                    }
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "doc.badge.arrow.up")
+                            .font(.system(size: 16))
+                            .foregroundColor(textColor)
+                        
+                        Text("File Transfers")
+                            .font(.system(size: 16, weight: .medium, design: .monospaced))
+                            .foregroundColor(textColor)
+                        
+                        Spacer()
+                        
+                        // Show count of active transfers if any
+                        if !viewModel.fileTransferManager.activeTransfers.isEmpty {
+                            Text("\(viewModel.fileTransferManager.activeTransfers.count)")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundColor(backgroundColor)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.blue)
+                                .clipShape(Capsule())
+                        }
                         
                         Image(systemName: "chevron.right")
                             .font(.system(size: 12))

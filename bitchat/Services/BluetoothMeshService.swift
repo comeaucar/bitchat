@@ -1039,6 +1039,120 @@ class BluetoothMeshService: NSObject {
         return rssiWithDefaults
     }
     
+    // MARK: - File Transfer Methods
+    
+    func sendFileTransferRequest(_ request: FileTransferRequest, to recipientID: String) async throws {
+        guard let payloadData = request.encode() else {
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileTransferRequest.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 5  // Medium TTL for request
+        )
+        
+        broadcastPacket(packet)
+    }
+    
+    func sendFileTransferResponse(_ response: FileTransferResponse, to recipientID: String) async throws {
+        guard let payloadData = response.encode() else {
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileTransferResponse.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 5
+        )
+        
+        broadcastPacket(packet)
+    }
+    
+    func sendFileChunk(_ chunk: FileChunk, to recipientID: String) async throws {
+        guard let payloadData = chunk.encode() else {
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileChunk.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 3  // Lower TTL for chunks to reduce network congestion
+        )
+        
+        broadcastPacket(packet)
+    }
+    
+    func sendFileChunkAck(_ ack: FileChunkAck, to recipientID: String) async throws {
+        guard let payloadData = ack.encode() else {
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileChunkAck.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 3
+        )
+        
+        broadcastPacket(packet)
+    }
+    
+    func sendFileTransferComplete(_ completion: FileTransferComplete, to recipientID: String) async throws {
+        guard let payloadData = completion.encode() else {
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileTransferComplete.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 5
+        )
+        
+        broadcastPacket(packet)
+    }
+    
+    func sendFileTransferCancel(_ cancellation: FileTransferCancel, to recipientID: String) async throws {
+        guard let payloadData = cancellation.encode() else {
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileTransferCancel.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 5
+        )
+        
+        broadcastPacket(packet)
+    }
+    
+    func getPeerID() async -> String {
+        return myPeerID
+    }
+    
     // Emergency disconnect for panic situations
     func emergencyDisconnectAll() {
         // Stop advertising immediately
@@ -2183,6 +2297,62 @@ class BluetoothMeshService: NSObject {
                 var relayPacket = packet
                 relayPacket.ttl -= 1
                 self.broadcastPacket(relayPacket)
+            }
+            
+        case .fileTransferRequest:
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let request = FileTransferRequest.decode(from: packet.payload) {
+                print("📥 Received file transfer request from \(senderID): \(request.fileName)")
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileTransferRequest(request, from: senderID)
+                }
+            }
+            
+        case .fileTransferResponse:
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let response = FileTransferResponse.decode(from: packet.payload) {
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileTransferResponse(response, from: senderID)
+                }
+            }
+            
+        case .fileChunk:
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let chunk = FileChunk.decode(from: packet.payload) {
+                print("📥 Received file chunk \(chunk.chunkIndex) from \(senderID) for transfer \(chunk.transferID.prefix(8))")
+                print("📥 Chunk size: \(chunk.chunkData.count) bytes, isLast: \(chunk.isLastChunk)")
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileChunk(chunk, from: senderID)
+                }
+            } else {
+                print("❌ Failed to decode file chunk from \(packet.payload.count) bytes")
+            }
+            
+        case .fileChunkAck:
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let ack = FileChunkAck.decode(from: packet.payload) {
+                print("📥 Received file chunk ACK \(ack.chunkIndex) from \(senderID) for transfer \(ack.transferID.prefix(8)) - success: \(ack.received)")
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileChunkAck(ack, from: senderID)
+                }
+            } else {
+                print("❌ Failed to decode file chunk ACK from \(packet.payload.count) bytes")
+            }
+            
+        case .fileTransferComplete:
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let completion = FileTransferComplete.decode(from: packet.payload) {
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileTransferComplete(completion, from: senderID)
+                }
+            }
+            
+        case .fileTransferCancel:
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let cancellation = FileTransferCancel.decode(from: packet.payload) {
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileTransferCancel(cancellation, from: senderID)
+                }
             }
             
         default:
