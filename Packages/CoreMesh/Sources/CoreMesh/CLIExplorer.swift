@@ -6,17 +6,20 @@ public class CLIExplorer {
     private let walletManager: WalletManager
     private let transactionProcessor: TransactionProcessor
     private let feeCalculator: FeeCalculator
+    private let proofOfWork: ProofOfWork
     
     public init(
         dagStorage: DAGStorage,
         walletManager: WalletManager,
         transactionProcessor: TransactionProcessor,
-        feeCalculator: FeeCalculator
+        feeCalculator: FeeCalculator,
+        proofOfWork: ProofOfWork
     ) {
         self.dagStorage = dagStorage
         self.walletManager = walletManager
         self.transactionProcessor = transactionProcessor
         self.feeCalculator = feeCalculator
+        self.proofOfWork = proofOfWork
     }
     
     // MARK: - CLI Commands
@@ -162,6 +165,35 @@ public class CLIExplorer {
         }
     }
     
+    /// Display Proof of Work statistics
+    public func showPoWStats() {
+        print("\n🔨 Proof of Work Statistics")
+        print("===========================")
+        
+        let stats = proofOfWork.getStatistics()
+        
+        print("Current Difficulty: \(stats.currentDifficulty) leading zeros")
+        print("Target Compute Time: \(String(format: "%.1f", stats.targetComputeTime))s")
+        print("Average Compute Time: \(String(format: "%.2f", stats.averageComputeTime))s")
+        print("Total Computations: \(stats.totalComputations)")
+        
+        // Performance indicator
+        let performance: String
+        if stats.averageComputeTime < stats.targetComputeTime * 0.8 {
+            performance = "🟢 Fast (difficulty may increase)"
+        } else if stats.averageComputeTime > stats.targetComputeTime * 1.5 {
+            performance = "🔴 Slow (difficulty may decrease)"
+        } else {
+            performance = "🟡 Balanced"
+        }
+        print("Performance: \(performance)")
+        
+        if stats.totalComputations == 0 {
+            print("\n💡 No PoW computations performed yet")
+            print("   PoW is only required when message fee < relay minimum fee")
+        }
+    }
+    
     /// Show help information
     public func showHelp() {
         print("""
@@ -179,6 +211,9 @@ public class CLIExplorer {
         💰 Wallet Operations:
           wallet <pubkey>    - Show wallet summary
           fee-calc <size> <ttl> [priority] - Calculate message fee
+        
+        🔨 Proof of Work:
+          pow-stats          - Show PoW statistics and difficulty
         
         🔧 Utility:
           help               - Show this help
@@ -240,6 +275,9 @@ public class CLIExplorer {
                 return
             }
             showTransaction(txId)
+            
+        case "pow-stats":
+            showPoWStats()
             
         case "wallet":
             guard let pubkey = args.first else {

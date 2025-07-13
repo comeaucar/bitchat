@@ -3,12 +3,14 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 54;
 	objects = {
 
 /* Begin PBXBuildFile section */
 		0245710AEAA58AD0A1425234 /* OptimizedBloomFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB043CA5EEB9AC8B07D61E97 /* OptimizedBloomFilter.swift */; };
 		055368CEF4231459674C1CAA /* DAGStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39AB1BCFCA083760AB91B4AF /* DAGStorage.swift */; };
+		0A1104FC14B06AA62281EED0 /* ProofOfWork.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD3AFC36280F00CEFADDF816 /* ProofOfWork.swift */; };
+		0CEB234BB46611B7349F5ED6 /* WalletView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E592264A7168BC98A5CA6CF /* WalletView.swift */; };
 		0DAFF1DDE9BA83FF648D5AB3 /* BitchatMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FA8FF26ABDC1C642A8C7AE5 /* BitchatMessageTests.swift */; };
 		0EDBD9B90A73A50B137F15B0 /* BridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13E6428CB9885C020C5E42FB /* BridgeService.swift */; };
 		10E68BB889356219189E38EC /* BitchatApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF625BB3AD919322C01A46B2 /* BitchatApp.swift */; };
@@ -48,6 +50,7 @@
 		7A5B1AB5642FEC168E917949 /* LinkPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC141774F6671FCDC347DC7 /* LinkPreviewView.swift */; };
 		7DCA0DBCB8884E3B31C7BCE3 /* CompressionUtil.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F149C43D1915831B60FE09 /* CompressionUtil.swift */; };
 		7DD72D928FF9DD3CA81B46B0 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3A69677D382F1C3D5ED03F7D /* Assets.xcassets */; };
+		7EA2D1AE213C5212DA2369C7 /* ProofOfWork.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD3AFC36280F00CEFADDF816 /* ProofOfWork.swift */; };
 		846E2B446E36639159704730 /* BloomFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EB3A8FE16333ED12FCB8ACB /* BloomFilterTests.swift */; };
 		885BBED78092484A5B069461 /* Crypto in Frameworks */ = {isa = PBXBuildFile; productRef = 3B69548C8EAFC786B9F5A11C /* Crypto */; };
 		8DCEEA289EF7C49E7CD38B08 /* DeliveryTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12B9C3EDF3BC73D3BC106DA4 /* DeliveryTracker.swift */; };
@@ -56,6 +59,7 @@
 		923027D6F2F417AFA2488127 /* BitchatProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 229F17B68CFF7AB1BC91C847 /* BitchatProtocol.swift */; };
 		9269B4230187A9EA969BEDB7 /* PasswordProtectedChannelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 036A1A705AAF9EC21F4354BE /* PasswordProtectedChannelTests.swift */; };
 		92D34E7A07C990C8A815B0CE /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A08E03AA0C63E97C91749AEC /* ContentView.swift */; };
+		99C1C58F8A2B7CAD57FB43A8 /* WalletView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6E592264A7168BC98A5CA6CF /* WalletView.swift */; };
 		9C7D287C8E67AAE576A5ECB7 /* ShareViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1B378C16594575FCC7F9C75 /* ShareViewController.swift */; };
 		ABAF130D88561F4A646F0430 /* AppInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 763E0DBA9492A654FC0CDCB9 /* AppInfoView.swift */; };
 		AC5D626BA0A7482D194D087E /* FeeCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00D10CCAC49CAD8BDDE61E /* FeeCalculator.swift */; };
@@ -77,8 +81,6 @@
 		CEAE115C9C3EB3C4ED82F128 /* MessageRetryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA4D7595A613F7ED3B386132 /* MessageRetryService.swift */; };
 		D450CF41F207BDE1A1AAA56E /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6B8F7B7D55092C2540A7996 /* ChatViewModel.swift */; };
 		D948085736ED8E736C1DE3B0 /* BluetoothMeshService.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5C3D880FF8AE1673B20E1E3 /* BluetoothMeshService.swift */; };
-		DBAD62532E23F42600F09608 /* WalletView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBAD62522E23F42600F09608 /* WalletView.swift */; };
-		DBAD62542E23F42600F09608 /* WalletView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBAD62522E23F42600F09608 /* WalletView.swift */; };
 		DDA1DFAB1FF7AADE52DC0F53 /* EncryptionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DC1563390A15C042D059CF9 /* EncryptionService.swift */; };
 		DDE40CC4D0878CC8CD827DA4 /* CLIExplorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5BC9120845C0B8092DF0A8 /* CLIExplorer.swift */; };
 		DEC5C589C69BA028271926FC /* PacketTTL.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAC7FB679C44373C5653E18A /* PacketTTL.swift */; };
@@ -158,12 +160,13 @@
 		61F92EBA29C47C0FCC482F1F /* bitchatShareExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = bitchatShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		67A85BFDDE65B4CD8BDF6DDB /* MessageRetentionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageRetentionService.swift; sourceTree = "<group>"; };
 		6DC1563390A15C042D059CF9 /* EncryptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionService.swift; sourceTree = "<group>"; };
+		6E592264A7168BC98A5CA6CF /* WalletView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletView.swift; sourceTree = "<group>"; };
 		763E0DBA9492A654FC0CDCB9 /* AppInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInfoView.swift; sourceTree = "<group>"; };
 		7B597BBA07CC576EC4B7ABD1 /* RouteOptimizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouteOptimizer.swift; sourceTree = "<group>"; };
 		8DE9CDF66D4E52D268851048 /* MessagePaddingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagePaddingTests.swift; sourceTree = "<group>"; };
-		8F3A7C058C2C8E1A06C8CF8B /* bitchat_macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = bitchat_macOS.app; path = bitchat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8F3A7C058C2C8E1A06C8CF8B /* bitchat_macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bitchat_macOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		95F16C3A4A5621C74461D8D3 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
-		96D0D41CA19EE5A772AA8434 /* bitchat_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; name = bitchat_iOS.app; path = bitchat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		96D0D41CA19EE5A772AA8434 /* bitchat_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = bitchat_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9AC141774F6671FCDC347DC7 /* LinkPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewView.swift; sourceTree = "<group>"; };
 		A08E03AA0C63E97C91749AEC /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A2136C3E22D02D4A8DBE7EAB /* BinaryProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BinaryProtocol.swift; sourceTree = "<group>"; };
@@ -175,7 +178,7 @@
 		CB043CA5EEB9AC8B07D61E97 /* OptimizedBloomFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OptimizedBloomFilter.swift; sourceTree = "<group>"; };
 		D5C3D880FF8AE1673B20E1E3 /* BluetoothMeshService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothMeshService.swift; sourceTree = "<group>"; };
 		D69A18D27F9A565FD6041E12 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
-		DBAD62522E23F42600F09608 /* WalletView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletView.swift; sourceTree = "<group>"; };
+		DD3AFC36280F00CEFADDF816 /* ProofOfWork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProofOfWork.swift; sourceTree = "<group>"; };
 		E6B8F7B7D55092C2540A7996 /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatViewModel.swift; sourceTree = "<group>"; };
 		EA2D967B5C9D9A20E7B8B841 /* RelayTx.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RelayTx.swift; sourceTree = "<group>"; };
 		EA706D8E5097785414646A8E /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
@@ -300,10 +303,10 @@
 		A55126E93155456CAA8D6656 /* Views */ = {
 			isa = PBXGroup;
 			children = (
-				DBAD62522E23F42600F09608 /* WalletView.swift */,
 				763E0DBA9492A654FC0CDCB9 /* AppInfoView.swift */,
 				A08E03AA0C63E97C91749AEC /* ContentView.swift */,
 				9AC141774F6671FCDC347DC7 /* LinkPreviewView.swift */,
+				6E592264A7168BC98A5CA6CF /* WalletView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -343,6 +346,7 @@
 				4EA73BB900BB6A459DDFF7FD /* HopLogger.swift */,
 				5B9CD2EEE6F7A4EFDA8B2544 /* PacketHeaderV2.swift */,
 				EAC7FB679C44373C5653E18A /* PacketTTL.swift */,
+				DD3AFC36280F00CEFADDF816 /* ProofOfWork.swift */,
 				EA2D967B5C9D9A20E7B8B841 /* RelayTx.swift */,
 				1DF7C523D0AD638051BA1F9D /* RewardDistributor.swift */,
 				7B597BBA07CC576EC4B7ABD1 /* RouteOptimizer.swift */,
@@ -508,6 +512,7 @@
 			packageReferences = (
 				0D19ED8C5147390C37DA3540 /* XCRemoteSwiftPackageReference "swift-crypto" */,
 			);
+			preferredProjectObjectVersion = 54;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -556,7 +561,6 @@
 			files = (
 				C25541FD244B1638A610D03C /* AnchoringService.swift in Sources */,
 				AD11E46940D742AEAF547EB2 /* AppInfoView.swift in Sources */,
-				DBAD62532E23F42600F09608 /* WalletView.swift in Sources */,
 				C0A80BA73EC1A372B9338E3C /* BatteryOptimizer.swift in Sources */,
 				4B747085D07A1BCE0F5BA612 /* BinaryProtocol.swift in Sources */,
 				6E7761E21C99F28AE2F9BE5F /* BitchatApp.swift in Sources */,
@@ -582,11 +586,13 @@
 				0245710AEAA58AD0A1425234 /* OptimizedBloomFilter.swift in Sources */,
 				522DA362058BB7D7E0491DEE /* PacketHeaderV2.swift in Sources */,
 				DEC5C589C69BA028271926FC /* PacketTTL.swift in Sources */,
+				7EA2D1AE213C5212DA2369C7 /* ProofOfWork.swift in Sources */,
 				5F83BD9FA23810F0262B9CE7 /* RelayTx.swift in Sources */,
 				EC2AD7FFBB8D6F5E13A573C2 /* RewardDistributor.swift in Sources */,
 				1C00C67EB1249346626346B2 /* RouteOptimizer.swift in Sources */,
 				55FFAE757899BF4BEA0EABFD /* TransactionProcessor.swift in Sources */,
 				B95EDA250E2E2A3FBCE08DED /* WalletManager.swift in Sources */,
+				0CEB234BB46611B7349F5ED6 /* WalletView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -596,7 +602,6 @@
 			files = (
 				55EA69FF638B398AB4365731 /* AnchoringService.swift in Sources */,
 				ABAF130D88561F4A646F0430 /* AppInfoView.swift in Sources */,
-				DBAD62542E23F42600F09608 /* WalletView.swift in Sources */,
 				5D95F2BFBE257A1225998389 /* BatteryOptimizer.swift in Sources */,
 				F455F011B3B648ADA233F998 /* BinaryProtocol.swift in Sources */,
 				10E68BB889356219189E38EC /* BitchatApp.swift in Sources */,
@@ -622,11 +627,13 @@
 				1F48A8CEEE9399D1EBD08F0C /* OptimizedBloomFilter.swift in Sources */,
 				AE6D6B26B47BC80E860EB2C4 /* PacketHeaderV2.swift in Sources */,
 				F61035FF949B5420953D88B9 /* PacketTTL.swift in Sources */,
+				0A1104FC14B06AA62281EED0 /* ProofOfWork.swift in Sources */,
 				4020B7AB37B800CF344D451F /* RelayTx.swift in Sources */,
 				1CFA1B310A3DE48AF56C85C2 /* RewardDistributor.swift in Sources */,
 				E879EBFD68C18E6B72B354E4 /* RouteOptimizer.swift in Sources */,
 				4BE1D6BBD118D049CF41E1C6 /* TransactionProcessor.swift in Sources */,
 				B82CC302A8ED5C17846B02A9 /* WalletManager.swift in Sources */,
+				99C1C58F8A2B7CAD57FB43A8 /* WalletView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

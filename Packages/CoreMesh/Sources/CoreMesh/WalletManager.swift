@@ -280,9 +280,11 @@ public final class WalletManager {
         
         print("💳 Wallet doesn't exist, creating new one...")
         
+        // Starting balance for testing: 100,000 µRLT (0.1 RLT)
+        let testingBalance: Int64 = 100_000
         let query = """
             INSERT OR IGNORE INTO wallets (public_key, balance_micro_rlt, last_updated, created_at)
-            VALUES (?, 0, ?, ?)
+            VALUES (?, ?, ?, ?)
         """
         
         var stmt: OpaquePointer?
@@ -303,10 +305,12 @@ public final class WalletManager {
         
         print("   Public key data length: \(pubKeyData.count)")
         print("   Timestamp: \(timestamp)")
+        print("   Starting balance: \(testingBalance)µRLT (testing)")
         
         sqlite3_bind_blob(stmt, 1, pubKeyData.withUnsafeBytes { $0.baseAddress }, Int32(pubKeyData.count), nil)
-        sqlite3_bind_int64(stmt, 2, timestamp)
+        sqlite3_bind_int64(stmt, 2, testingBalance)
         sqlite3_bind_int64(stmt, 3, timestamp)
+        sqlite3_bind_int64(stmt, 4, timestamp)
         
         print("💳 Executing wallet creation statement...")
         let stepResult = sqlite3_step(stmt)
@@ -316,7 +320,7 @@ public final class WalletManager {
             throw WalletError.databaseError("Failed to create wallet: \(errorMsg)")
         }
         
-        print("✅ Wallet created successfully")
+        print("✅ Wallet created successfully with \(testingBalance)µRLT starting balance")
     }
     
     /// Get wallet balance in µRLT
@@ -339,7 +343,23 @@ public final class WalletManager {
             } else {
                 // Wallet doesn't exist, create it inline to avoid queue deadlock
                 try createWalletUnsafe(for: publicKey)
-                return 0
+                
+                // Re-execute query to get the actual balance from newly created wallet
+                sqlite3_finalize(stmt)
+                
+                guard sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK else {
+                    throw WalletError.databaseError("Failed to prepare balance query after wallet creation")
+                }
+                
+                sqlite3_bind_blob(stmt, 1, pubKeyData.withUnsafeBytes { $0.baseAddress }, Int32(pubKeyData.count), nil)
+                
+                if sqlite3_step(stmt) == SQLITE_ROW {
+                    let balance = UInt64(sqlite3_column_int64(stmt, 0))
+                    print("💰 Retrieved balance after wallet creation: \(balance)µRLT")
+                    return balance
+                } else {
+                    throw WalletError.databaseError("Failed to read balance after wallet creation")
+                }
             }
         }
     }
@@ -363,7 +383,26 @@ public final class WalletManager {
         } else {
             // Wallet doesn't exist, create it inline to avoid queue deadlock
             try createWalletUnsafe(for: publicKey)
-            return 0
+            
+            // Now query the actual balance from the newly created wallet
+            if sqlite3_step(stmt) == SQLITE_ROW {
+                return UInt64(sqlite3_column_int64(stmt, 0))
+            } else {
+                // Re-prepare and execute the query after wallet creation
+                sqlite3_finalize(stmt)
+                
+                guard sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK else {
+                    throw WalletError.databaseError("Failed to prepare balance query after wallet creation")
+                }
+                
+                sqlite3_bind_blob(stmt, 1, pubKeyData.withUnsafeBytes { $0.baseAddress }, Int32(pubKeyData.count), nil)
+                
+                if sqlite3_step(stmt) == SQLITE_ROW {
+                    return UInt64(sqlite3_column_int64(stmt, 0))
+                } else {
+                    throw WalletError.databaseError("Failed to read balance after wallet creation")
+                }
+            }
         }
     }
     

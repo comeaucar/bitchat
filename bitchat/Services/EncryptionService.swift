@@ -60,6 +60,11 @@ class EncryptionService {
         return data  // Total: 96 bytes
     }
     
+    // Get signing private key for relay transactions
+    func getSigningPrivateKey() -> Curve25519.Signing.PrivateKey {
+        return signingPrivateKey
+    }
+    
     // Add peer's combined public keys
     func addPeerPublicKey(_ peerID: String, publicKeyData: Data) throws {
         try cryptoQueue.sync(flags: .barrier) {

@@ -40,7 +40,7 @@ public final class TransactionProcessor {
     // MARK: - Transaction Processing
     
     /// Process a new transaction (validate, add to DAG, award rewards)
-    public func processTransaction(_ transaction: SignedRelayTx) throws {
+    public func processTransaction(_ transaction: SignedRelayTx, isLocallyOriginated: Bool = false) throws {
         let txHash = transaction.transaction.id.hexString.prefix(8)
         print("🔄 Processing transaction \(txHash)...")
         
@@ -72,7 +72,7 @@ public final class TransactionProcessor {
             
             // 5. Award relay rewards
             do {
-                try awardRelayRewards(for: transaction)
+                try awardRelayRewards(for: transaction, isLocallyOriginated: isLocallyOriginated)
                 print("✅ Awarded relay rewards for transaction \(txHash)")
             } catch {
                 print("❌ Failed to award relay rewards for transaction \(txHash): \(error)")
@@ -142,13 +142,20 @@ public final class TransactionProcessor {
     /// - Parameters:
     ///   - transaction: The transaction to process rewards for
     ///   - relayPath: Optional relay path for proper reward distribution
-    private func awardRelayRewards(for transaction: SignedRelayTx, relayPath: [CryptoCurve25519.Signing.PublicKey]? = nil) throws {
+    ///   - isLocallyOriginated: Whether this transaction was created locally (don't reward sender)
+    private func awardRelayRewards(for transaction: SignedRelayTx, relayPath: [CryptoCurve25519.Signing.PublicKey]? = nil, isLocallyOriginated: Bool = false) throws {
         let feePerHop = transaction.transaction.feePerHop
         let senderPubKey = transaction.transaction.senderPub
         let keyHash = senderPubKey.rawRepresentation.prefix(8).hexEncodedString()
         let txHash = transaction.transaction.id.hexString.prefix(8)
         
-        print("🏆 Processing rewards for transaction \(txHash)")
+        print("🏆 Processing rewards for transaction \(txHash) (locally originated: \(isLocallyOriginated))")
+        
+        // Don't award relay rewards to yourself for your own messages
+        if isLocallyOriginated {
+            print("💡 Skipping relay reward for locally originated transaction \(txHash)")
+            return
+        }
         
         // If we have a relay path, distribute rewards properly
         if let relayPath = relayPath, !relayPath.isEmpty {
@@ -171,8 +178,7 @@ public final class TransactionProcessor {
                 try awardFallbackReward(to: senderPubKey, transaction: transaction)
             }
         } else {
-            // No relay path available, award to sender as fallback
-            // This happens for locally originated transactions
+            // This is a relayed transaction from another node - award relay reward
             try awardFallbackReward(to: senderPubKey, transaction: transaction)
         }
     }
@@ -309,6 +315,11 @@ public final class TransactionProcessor {
     /// Get reward distributor for immediate relay rewards
     public func getRewardDistributor() -> RewardDistributor {
         return rewardDistributor
+    }
+    
+    /// Get wallet manager for fee deduction
+    public func getWalletManager() -> WalletManager {
+        return walletManager
     }
     
     /// Award immediate relay reward to a node

@@ -87,6 +87,9 @@ class BluetoothMeshService: NSObject {
     // Route optimizer for budgeted routing
     private var routeOptimizer: RouteOptimizer?
     
+    // Proof of Work service for spam protection
+    private let proofOfWork = ProofOfWork()
+    
     // Transaction processor for relay rewards
     private weak var transactionProcessor: TransactionProcessor?
     
@@ -555,6 +558,23 @@ class BluetoothMeshService: NSObject {
                     signature = nil
                 }
                 
+                // Compute Proof of Work for spam protection if fee is too low
+                // Calculate actual fee based on message size and TTL
+                let baseFee: UInt32 = 1500 // µRLT base (matching cost analysis)
+                let sizeFee = UInt32(messageData.count) * 5 // ~5µRLT per byte for broadcast
+                let hopFee = UInt32(self.adaptiveTTL) * 100 // 100µRLT per hop
+                let congestionMultiplier: Double = 2.0 // Assume 2x congestion like cost analysis
+                let rawFee = baseFee + sizeFee + hopFee
+                let actualFee = UInt32(Double(rawFee) * congestionMultiplier)
+                print("💰 Broadcast message fee calculation: (\(baseFee) + \(sizeFee) + \(hopFee)) × \(congestionMultiplier) = \(actualFee)µRLT")
+                let powResult = self.computeProofOfWorkIfNeeded(messageData: messageData, messageFee: actualFee)
+                if powResult != nil {
+                    print("🔨 PoW computed for low-fee broadcast message")
+                }
+                
+                // Create relay transaction for this message
+                self.createRelayTransaction(for: messageData, fee: actualFee, isPrivate: false)
+                
                 // Use unified message type with broadcast recipient
                 let packet = BitchatPacket(
                     type: MessageType.message.rawValue,
@@ -658,6 +678,23 @@ class BluetoothMeshService: NSObject {
                     // print("[CRYPTO] Failed to sign private message: \(error)")
                     signature = nil
                 }
+                
+                // Compute Proof of Work for spam protection if fee is too low
+                // Calculate actual fee based on message size and TTL (matching cost analysis)
+                let baseFee: UInt32 = 1500 // µRLT base (matching cost analysis)
+                let sizeFee = UInt32(encryptedPayload.count) * 10 // ~10µRLT per byte for private messages
+                let hopFee = UInt32(self.adaptiveTTL) * 100 // 100µRLT per hop
+                let congestionMultiplier: Double = 2.0 // Assume 2x congestion like cost analysis
+                let rawFee = baseFee + sizeFee + hopFee
+                let actualFee = UInt32(Double(rawFee) * congestionMultiplier)
+                print("💰 Private message fee calculation: (\(baseFee) + \(sizeFee) + \(hopFee)) × \(congestionMultiplier) = \(actualFee)µRLT")
+                let powResult = self.computeProofOfWorkIfNeeded(messageData: encryptedPayload, messageFee: actualFee)
+                if powResult != nil {
+                    print("🔨 PoW computed for low-fee private message")
+                }
+                
+                // Create relay transaction for this private message
+                self.createRelayTransaction(for: encryptedPayload, fee: actualFee, isPrivate: true)
                 
                 // Create packet with recipient ID for proper routing
                 let packet = BitchatPacket(
@@ -3196,6 +3233,167 @@ extension BluetoothMeshService: FeeBeaconManagerDelegate {
         // Notify delegate about fee beacon updates
         DispatchQueue.main.async { [weak self] in
             self?.delegate?.didUpdateNetworkFees()
+        }
+    }
+}
+
+// MARK: - Proof of Work Extension
+
+extension BluetoothMeshService {
+    
+    /// Compute Proof of Work for low-fee messages
+    /// - Parameters:
+    ///   - messageData: The message payload data
+    ///   - messageFee: Fee being paid for the message (µRLT)
+    /// - Returns: ProofOfWorkResult if PoW is required, nil otherwise
+    private func computeProofOfWorkIfNeeded(messageData: Data, messageFee: UInt32) -> ProofOfWorkResult? {
+        // Get current network minimum fee
+        guard let feeBeaconManager = feeBeaconManager else { return nil }
+        let relayMinFee = feeBeaconManager.relayMinFee
+        
+        // Check if PoW is required
+        guard proofOfWork.requiresProofOfWork(messageFee: messageFee, relayMinFee: relayMinFee) else {
+            print("💰 Message fee (\(messageFee)µRLT) >= relay min fee (\(relayMinFee)µRLT), no PoW required")
+            return nil
+        }
+        
+        print("🔨 Message fee (\(messageFee)µRLT) < relay min fee (\(relayMinFee)µRLT), computing PoW...")
+        
+        // Get sender signing public key
+        let senderPubKey = encryptionService.signingPublicKey
+        
+        // Compute PoW
+        let timestamp = UInt64(Date().timeIntervalSince1970 * 1000) // milliseconds
+        let powResult = proofOfWork.computeProofOfWork(
+            messageData: messageData,
+            senderPubKey: senderPubKey,
+            timestamp: timestamp
+        )
+        
+        print("✅ PoW computed: nonce \(powResult.nonce), difficulty \(powResult.difficulty)")
+        return powResult
+    }
+    
+    /// Verify Proof of Work for received messages
+    /// - Parameters:
+    ///   - messageData: The message payload data
+    ///   - senderPubKey: Sender's public key
+    ///   - timestamp: Message timestamp
+    ///   - powResult: PoW result to verify
+    /// - Returns: True if PoW is valid or not required
+    private func verifyProofOfWorkIfNeeded(
+        messageData: Data,
+        senderPubKey: CryptoCurve25519.Signing.PublicKey,
+        timestamp: UInt64,
+        powResult: ProofOfWorkResult?
+    ) -> Bool {
+        // If no PoW provided, that's fine (high-fee message)
+        guard let powResult = powResult else { return true }
+        
+        // Verify the PoW
+        let isValid = proofOfWork.verifyProofOfWork(
+            messageData: messageData,
+            senderPubKey: senderPubKey,
+            timestamp: timestamp,
+            powResult: powResult
+        )
+        
+        if isValid {
+            print("✅ PoW verification passed")
+        } else {
+            print("❌ PoW verification failed - message rejected")
+        }
+        
+        return isValid
+    }
+    
+    /// Create enhanced packet with PoW support
+    /// - Parameters:
+    ///   - messageData: The message payload
+    ///   - messageFee: Fee being paid (µRLT)
+    ///   - type: Message type
+    ///   - senderID: Sender identifier
+    ///   - recipientID: Recipient identifier (optional)
+    ///   - signature: Message signature (optional)
+    ///   - ttl: Time to live for packet
+    /// - Returns: BitchatPacket with PoW if required
+    private func createPacketWithPoW(
+        messageData: Data,
+        messageFee: UInt32,
+        type: UInt8,
+        senderID: Data,
+        recipientID: Data?,
+        signature: Data?,
+        ttl: UInt8
+    ) -> BitchatPacket {
+        // Compute PoW if needed
+        let powResult = computeProofOfWorkIfNeeded(messageData: messageData, messageFee: messageFee)
+        
+        // Create basic packet (for now, until we fully migrate to CryptoPacket)
+        return BitchatPacket(
+            type: type,
+            senderID: senderID,
+            recipientID: recipientID,
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: messageData,
+            signature: signature,
+            ttl: ttl
+        )
+        
+        // TODO: Integrate PoW into packet structure
+        // This will require updating BitchatPacket to include PoW fields
+        // or creating a new enhanced packet format
+    }
+    
+    /// Create relay transaction for message fees
+    /// - Parameters:
+    ///   - messageData: The message payload
+    ///   - fee: Fee amount in µRLT
+    ///   - isPrivate: Whether this is a private message
+    private func createRelayTransaction(for messageData: Data, fee: UInt32, isPrivate: Bool) {
+        guard let transactionProcessor = transactionProcessor else {
+            print("⚠️ No transaction processor available for relay transaction")
+            return
+        }
+        
+        print("🔍 Transaction processor connected: \(type(of: transactionProcessor))")
+        
+        do {
+            // Get sender signing private key (needed for transaction creation)
+            let senderPrivateKey = encryptionService.getSigningPrivateKey()
+            
+            print("💳 Creating relay transaction: fee \(fee)µRLT, \(isPrivate ? "private" : "broadcast") message")
+            
+            // Create and process relay transaction
+            let signedTx = try transactionProcessor.createMessageTransaction(
+                feePerHop: fee,
+                senderPrivateKey: senderPrivateKey,
+                messagePayload: messageData
+            )
+            
+            // First, deduct the fee from sender's wallet
+            let walletManager = transactionProcessor.getWalletManager()
+            do {
+                try walletManager.spendTokens(
+                    from: senderPrivateKey.publicKey,
+                    amount: UInt64(fee),
+                    transactionId: signedTx.transaction.id,
+                    description: "Message fee (\(isPrivate ? "private" : "broadcast"))"
+                )
+                print("💸 Deducted \(fee)µRLT fee from sender wallet")
+            } catch {
+                print("⚠️  Could not deduct fee from wallet: \(error)")
+                // Continue anyway - the transaction is still valid
+            }
+            
+            // Process the transaction to add it to DAG (skip self-rewards for locally originated transactions)
+            try transactionProcessor.processTransaction(signedTx, isLocallyOriginated: true)
+            
+            print("✅ Relay transaction created and processed: \(signedTx.transaction.id.hexString.prefix(8))...")
+            print("💰 Transaction fee: \(fee)µRLT deducted from sender")
+            
+        } catch {
+            print("❌ Error creating relay transaction: \(error)")
         }
     }
 }

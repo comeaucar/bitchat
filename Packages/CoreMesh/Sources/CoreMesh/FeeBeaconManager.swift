@@ -14,7 +14,7 @@ public final class FeeBeaconManager {
     // MARK: - Properties
     
     /// Current minimum fee this node will accept for relaying (in µRLT)
-    public private(set) var relayMinFee: UInt32 = 50  // 0.00005 RLT minimum
+    public private(set) var relayMinFee: UInt32 = 5000  // 0.005 RLT minimum (high enough to trigger PoW for most messages)
     
     /// Collected fee beacons from other nodes
     private var peerFeeBeacons: [String: FeeBeacon] = [:]
@@ -74,8 +74,8 @@ public final class FeeBeaconManager {
         // Calculate new minimum fee
         let newMinFee = UInt32(Double(adaptiveBase) * batteryMultiplier * congestionMultiplier)
         
-        // Ensure minimum threshold
-        self.relayMinFee = max(newMinFee, 10)  // At least 10 µRLT
+        // Ensure minimum threshold (high for PoW testing)
+        self.relayMinFee = max(newMinFee, 5000)  // At least 5000 µRLT for PoW testing
         
         print("🏷️  Updated relay minimum fee to \(relayMinFee)µRLT (battery: \(String(format: "%.2f", batteryMultiplier))x, congestion: \(String(format: "%.2f", congestionMultiplier))x)")
         
