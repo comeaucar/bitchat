@@ -1,14 +1,4 @@
 import XCTest
-#if canImport(CryptoKit)
-import CryptoKit
-typealias CryptoSHA256 = CryptoKit.SHA256
-typealias CryptoCurve25519 = CryptoKit.Curve25519
-#else
-import Crypto
-typealias CryptoSHA256 = Crypto.SHA256
-typealias CryptoCurve25519 = Crypto.Curve25519
-#endif
-
 @testable import CoreMesh
 
 final class RelayTxTests: XCTestCase {

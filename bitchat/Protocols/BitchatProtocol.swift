@@ -8,6 +8,192 @@
 
 import Foundation
 import CryptoKit
+#if canImport(Crypto)
+import Crypto
+#endif
+
+// Enhanced packet structure for crypto functionality
+struct CryptoPacket {
+    let headerV2: BitChatHeaderV2
+    let type: UInt8
+    let senderID: Data
+    let recipientID: Data?
+    let timestamp: UInt64
+    let payload: Data
+    let signature: Data?
+    let relayTx: RelayTx?  // Associated relay transaction
+    
+    init(headerV2: BitChatHeaderV2, type: UInt8, senderID: Data, recipientID: Data?, timestamp: UInt64, payload: Data, signature: Data?, relayTx: RelayTx? = nil) {
+        self.headerV2 = headerV2
+        self.type = type
+        self.senderID = senderID
+        self.recipientID = recipientID
+        self.timestamp = timestamp
+        self.payload = payload
+        self.signature = signature
+        self.relayTx = relayTx
+    }
+    
+    // Convert to legacy packet for compatibility
+    func toLegacyPacket() -> BitchatPacket {
+        return BitchatPacket(
+            type: type,
+            senderID: senderID,
+            recipientID: recipientID,
+            timestamp: timestamp,
+            payload: payload,
+            signature: signature,
+            ttl: headerV2.ttl
+        )
+    }
+    
+    // Create from legacy packet with default crypto values
+    static func from(legacyPacket: BitchatPacket, feePerHop: UInt32 = 0, txHash: [UInt8] = [UInt8](repeating: 0, count: 32)) -> CryptoPacket {
+        let headerV2 = BitChatHeaderV2(
+            ttl: legacyPacket.ttl,
+            feePerHop: feePerHop,
+            txHash: txHash
+        )
+        
+        return CryptoPacket(
+            headerV2: headerV2,
+            type: legacyPacket.type,
+            senderID: legacyPacket.senderID,
+            recipientID: legacyPacket.recipientID,
+            timestamp: legacyPacket.timestamp,
+            payload: legacyPacket.payload,
+            signature: legacyPacket.signature
+        )
+    }
+    
+    // Encode to binary format
+    func encode() -> Data? {
+        var data = Data()
+        
+        // Add V2 header first
+        data.append(headerV2.encode())
+        
+        // Add remaining packet data (type, senderID, etc.)
+        data.append(type)
+        
+        // Add senderID length + data
+        let senderIDData = senderID.count > 8 ? senderID.prefix(8) : senderID
+        data.append(contentsOf: senderIDData)
+        if senderIDData.count < 8 {
+            data.append(Data(repeating: 0, count: 8 - senderIDData.count))
+        }
+        
+        // Add recipientID flag and data
+        if let recipientID = recipientID {
+            data.append(1) // has recipient
+            let recipientIDData = recipientID.count > 8 ? recipientID.prefix(8) : recipientID
+            data.append(contentsOf: recipientIDData)
+            if recipientIDData.count < 8 {
+                data.append(Data(repeating: 0, count: 8 - recipientIDData.count))
+            }
+        } else {
+            data.append(0) // no recipient
+        }
+        
+        // Add timestamp (8 bytes, big-endian)
+        for i in (0..<8).reversed() {
+            data.append(UInt8((timestamp >> (i * 8)) & 0xFF))
+        }
+        
+        // Add payload length (2 bytes) + payload
+        let payloadLength = UInt16(payload.count)
+        data.append(UInt8((payloadLength >> 8) & 0xFF))
+        data.append(UInt8(payloadLength & 0xFF))
+        data.append(payload)
+        
+        // Add signature flag and data
+        if let signature = signature {
+            data.append(1) // has signature
+            let sigData = signature.count > 64 ? signature.prefix(64) : signature
+            data.append(contentsOf: sigData)
+            if sigData.count < 64 {
+                data.append(Data(repeating: 0, count: 64 - sigData.count))
+            }
+        } else {
+            data.append(0) // no signature
+        }
+        
+        return data
+    }
+    
+    // Decode from binary format
+    static func decode(_ data: Data) -> CryptoPacket? {
+        guard data.count >= BitChatHeaderV2.byteCount else { return nil }
+        
+        var offset = 0
+        
+        // Decode V2 header
+        guard let headerV2 = try? BitChatHeaderV2.decode(data.subdata(in: offset..<offset + BitChatHeaderV2.byteCount)) else {
+            return nil
+        }
+        offset += BitChatHeaderV2.byteCount
+        
+        // Decode type
+        guard offset < data.count else { return nil }
+        let type = data[offset]
+        offset += 1
+        
+        // Decode senderID
+        guard offset + 8 <= data.count else { return nil }
+        let senderID = data.subdata(in: offset..<offset + 8)
+        offset += 8
+        
+        // Decode recipientID
+        guard offset < data.count else { return nil }
+        let hasRecipient = data[offset] == 1
+        offset += 1
+        
+        var recipientID: Data?
+        if hasRecipient {
+            guard offset + 8 <= data.count else { return nil }
+            recipientID = data.subdata(in: offset..<offset + 8)
+            offset += 8
+        }
+        
+        // Decode timestamp
+        guard offset + 8 <= data.count else { return nil }
+        let timestampData = data.subdata(in: offset..<offset + 8)
+        let timestamp = timestampData.reduce(0) { result, byte in
+            (result << 8) | UInt64(byte)
+        }
+        offset += 8
+        
+        // Decode payload
+        guard offset + 2 <= data.count else { return nil }
+        let payloadLength = Int(data[offset]) << 8 | Int(data[offset + 1])
+        offset += 2
+        
+        guard offset + payloadLength <= data.count else { return nil }
+        let payload = data.subdata(in: offset..<offset + payloadLength)
+        offset += payloadLength
+        
+        // Decode signature
+        guard offset < data.count else { return nil }
+        let hasSignature = data[offset] == 1
+        offset += 1
+        
+        var signature: Data?
+        if hasSignature {
+            guard offset + 64 <= data.count else { return nil }
+            signature = data.subdata(in: offset..<offset + 64)
+        }
+        
+        return CryptoPacket(
+            headerV2: headerV2,
+            type: type,
+            senderID: senderID,
+            recipientID: recipientID,
+            timestamp: timestamp,
+            payload: payload,
+            signature: signature
+        )
+    }
+}
 
 // Privacy-preserving padding utilities
 struct MessagePadding {

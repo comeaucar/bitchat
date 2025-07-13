@@ -11,6 +11,9 @@ import SwiftUI
 import Combine
 import CryptoKit
 import CommonCrypto
+#if canImport(Crypto)
+import Crypto
+#endif
 #if os(iOS)
 import UIKit
 #endif
@@ -52,6 +55,36 @@ class ChatViewModel: ObservableObject {
     @Published var retentionEnabledChannels: Set<String> = []  // Channels where owner enabled retention for all members
     
     let meshService = BluetoothMeshService()
+    private let feeCalculator = FeeCalculator()
+    private lazy var dagStorage: DAGStorage = {
+        do {
+            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let dbPath = documentsPath.appendingPathComponent("bitchat_dag.db").path
+            return try SQLiteDAGStorage(dbPath: dbPath, maxTransactions: 10000)
+        } catch {
+            print("❌ Failed to initialize DAGStorage: \(error)")
+            // Fallback to in-memory implementation if available
+            fatalError("Cannot initialize DAG storage")
+        }
+    }()
+    private lazy var walletManager: WalletManager = {
+        do {
+            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let dbPath = documentsPath.appendingPathComponent("bitchat_wallet.db").path
+            return try WalletManager(dbPath: dbPath)
+        } catch {
+            print("❌ Failed to initialize WalletManager: \(error)")
+            fatalError("Cannot initialize wallet manager")
+        }
+    }()
+    private lazy var transactionProcessor: TransactionProcessor? = {
+        do {
+            return try TransactionProcessor(dagStorage: dagStorage, walletManager: walletManager)
+        } catch {
+            print("❌ Failed to initialize TransactionProcessor: \(error)")
+            return nil
+        }
+    }()
     private let userDefaults = UserDefaults.standard
     private let nicknameKey = "bitchat.nickname"
     private let favoritesKey = "bitchat.favorites"
@@ -100,6 +133,16 @@ class ChatViewModel: ObservableObject {
             .sink { [weak self] (messageID, status) in
                 self?.updateMessageDeliveryStatus(messageID, status: status)
             }
+        
+        // Log initial CoreMesh network state
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            self.logNetworkStatistics()
+        }
+        
+        // Set up periodic network statistics logging (every 60 seconds)
+        Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
+            self.logNetworkStatistics()
+        }
         
         // Show welcome message after delay if still no peers
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
@@ -905,6 +948,52 @@ class ChatViewModel: ObservableObject {
                 }
             }
             
+            // Calculate message cost using CoreMesh
+            let messageData = content.data(using: .utf8) ?? Data()
+            let messageSize = messageData.count
+            let estimatedTTL: UInt8 = 5  // Default TTL for mesh routing
+            let priority = MessagePriority.normal
+            
+            let feeCalculation = feeCalculator.calculateFee(
+                messageSize: messageSize,
+                ttl: estimatedTTL,
+                priority: priority
+            )
+            
+            // Create relay transaction for the message
+            if let processor = transactionProcessor,
+               let senderKey = try? CryptoCurve25519.Signing.PrivateKey() {
+                
+                do {
+                    let transaction = try processor.createMessageTransaction(
+                        feePerHop: feeCalculation.hopFee,
+                        senderPrivateKey: senderKey,
+                        messagePayload: messageData
+                    )
+                    
+                    // Process the transaction to add it to DAG
+                    try processor.processTransaction(transaction)
+                    
+                    // Log cost information
+                    print("💰 Message Cost Analysis:")
+                    print("   Size: \(messageSize) bytes")
+                    print("   TTL: \(estimatedTTL) hops")
+                    print("   Priority: \(priority.rawValue)")
+                    print("   Base Fee: \(feeCalculation.baseFee)µRLT")
+                    print("   Size Fee: \(feeCalculation.sizeFee)µRLT")
+                    print("   Hop Fee: \(feeCalculation.hopFee)µRLT")
+                    print("   Total Fee: \(feeCalculation.totalFee)µRLT (\(String(format: "%.6f", feeCalculation.feeInRLT)) RLT)")
+                    print("   Est. Delivery: \(String(format: "%.2f", feeCalculation.estimatedDeliveryTime))s")
+                    print("   Congestion Multiplier: \(String(format: "%.2f", feeCalculation.congestionMultiplier))x")
+                    
+                } catch {
+                    print("❌ Transaction processing failed: \(error)")
+                }
+            }
+            
+            // Record the fee for network statistics
+            feeCalculator.recordPaidFee(feeCalculation.totalFee)
+            
             // Check if channel is password protected and encrypt if needed
             if let channel = messageChannel, channelKeys[channel] != nil {
                 // Send encrypted channel message
@@ -959,11 +1048,92 @@ class ChatViewModel: ObservableObject {
         let isFavorite = isFavorite(peerID: peerID)
         DeliveryTracker.shared.trackMessage(message, recipientID: peerID, recipientNickname: recipientNickname, isFavorite: isFavorite)
         
+        // Calculate private message cost using CoreMesh
+        let messageData = content.data(using: .utf8) ?? Data()
+        let messageSize = messageData.count
+        let estimatedTTL: UInt8 = 3  // Private messages typically use shorter routes
+        let priority = isFavorite ? MessagePriority.high : MessagePriority.normal
+        
+        let feeCalculation = feeCalculator.calculateFee(
+            messageSize: messageSize,
+            ttl: estimatedTTL,
+            priority: priority
+        )
+        
+        // Create relay transaction for the private message
+        if let processor = transactionProcessor,
+           let senderKey = try? CryptoCurve25519.Signing.PrivateKey() {
+            
+            do {
+                let transaction = try processor.createMessageTransaction(
+                    feePerHop: feeCalculation.hopFee,
+                    senderPrivateKey: senderKey,
+                    messagePayload: messageData
+                )
+                
+                // Process the transaction to add it to DAG
+                try processor.processTransaction(transaction)
+                
+                // Log cost information for private messages
+                print("🔒 Private Message Cost Analysis (to \(recipientNickname)):")
+                print("   Size: \(messageSize) bytes")
+                print("   TTL: \(estimatedTTL) hops")
+                print("   Priority: \(priority.rawValue) \(isFavorite ? "(favorite)" : "")")
+                print("   Total Fee: \(feeCalculation.totalFee)µRLT (\(String(format: "%.6f", feeCalculation.feeInRLT)) RLT)")
+                print("   Est. Delivery: \(String(format: "%.2f", feeCalculation.estimatedDeliveryTime))s")
+                
+            } catch {
+                print("❌ Private message transaction processing failed: \(error)")
+            }
+        }
+        
+        // Record the fee for network statistics
+        feeCalculator.recordPaidFee(feeCalculation.totalFee)
+        
         // Trigger UI update
         objectWillChange.send()
         
         // Send via mesh with the same message ID
         meshService.sendPrivateMessage(content, to: peerID, recipientNickname: recipientNickname, messageID: message.id)
+    }
+    
+    // Display CoreMesh network statistics
+    func logNetworkStatistics() {
+        print("📊 CoreMesh Network Statistics:")
+        
+        // DAG Statistics
+        let dagStats = dagStorage.getStatistics()
+        print("   DAG:")
+        print("     Total Transactions: \(dagStats.totalTransactions)")
+        print("     Current Tips: \(dagStats.tipCount)")
+        print("     Total Weight: \(dagStats.totalWeight)")
+        
+        // Transaction Processing Statistics
+        if let processor = transactionProcessor {
+            let txStats = processor.getStatistics()
+            print("   Transactions:")
+            print("     Processed: \(txStats.processedTransactionCount)")
+            print("     Total Fees: \(txStats.totalFeesProcessed)µRLT")
+            print("     Total Rewards: \(txStats.totalRewardsAwarded)µRLT")
+        }
+        
+        // Wallet Statistics
+        do {
+            let walletStats = try walletManager.getStatistics()
+            print("   Wallet:")
+            print("     Total Balance: \(walletStats.totalBalance)µRLT")
+            print("     Transaction Count: \(walletStats.transactionCount)")
+            print("     Reward Count: \(walletStats.rewardCount)")
+        } catch {
+            print("   Wallet: Error getting statistics - \(error)")
+        }
+        
+        // Fee Calculator Network Conditions
+        let networkConditions = feeCalculator.getCurrentNetworkConditions()
+        print("   Network Conditions:")
+        print("     Congestion: \(String(format: "%.2f", networkConditions.congestion * 100))%")
+        print("     Avg Latency: \(String(format: "%.3f", networkConditions.averageLatency))s")
+        print("     Adaptive Base Fee: \(feeCalculator.getAdaptiveBaseFee())µRLT")
     }
     
     func startPrivateChat(with peerID: String) {
@@ -2454,6 +2624,55 @@ extension ChatViewModel: BitchatDelegate {
                     isRelay: false
                 )
                 messages.append(systemMessage)
+            }
+            
+        case "/stats":
+            // Display CoreMesh network statistics
+            let dagStats = dagStorage.getStatistics()
+            
+            do {
+                let walletStats = try walletManager.getStatistics()
+                let networkConditions = feeCalculator.getCurrentNetworkConditions()
+                
+                var statsContent = "📊 CoreMesh Network Statistics\n"
+                statsContent += "\n🔗 DAG:\n"
+                statsContent += "  • Transactions: \(dagStats.totalTransactions)\n"
+                statsContent += "  • Tips: \(dagStats.tipCount)\n"
+                statsContent += "  • Total Weight: \(dagStats.totalWeight)\n"
+                
+                if let processor = transactionProcessor {
+                    let txStats = processor.getStatistics()
+                    statsContent += "\n💳 Transactions:\n"
+                    statsContent += "  • Processed: \(txStats.processedTransactionCount)\n"
+                    statsContent += "  • Total Fees: \(txStats.totalFeesProcessed)µRLT\n"
+                    statsContent += "  • Total Rewards: \(txStats.totalRewardsAwarded)µRLT\n"
+                }
+                
+                statsContent += "\n💰 Wallet:\n"
+                statsContent += "  • Balance: \(walletStats.totalBalance)µRLT\n"
+                statsContent += "  • Transactions: \(walletStats.transactionCount)\n"
+                statsContent += "  • Rewards: \(walletStats.rewardCount)\n"
+                
+                statsContent += "\n🌐 Network:\n"
+                statsContent += "  • Congestion: \(String(format: "%.1f", networkConditions.congestion * 100))%\n"
+                statsContent += "  • Avg Latency: \(String(format: "%.3f", networkConditions.averageLatency))s\n"
+                statsContent += "  • Base Fee: \(feeCalculator.getAdaptiveBaseFee())µRLT/hop"
+                
+                let systemMessage = BitchatMessage(
+                    sender: "system",
+                    content: statsContent,
+                    timestamp: Date(),
+                    isRelay: false
+                )
+                messages.append(systemMessage)
+            } catch {
+                let errorMessage = BitchatMessage(
+                    sender: "system",
+                    content: "📊 Error retrieving wallet statistics: \(error)",
+                    timestamp: Date(),
+                    isRelay: false
+                )
+                messages.append(errorMessage)
             }
             
         default:

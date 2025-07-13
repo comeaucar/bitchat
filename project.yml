@@ -1,24 +1,26 @@
 name: bitchat
 packages:
-  CoreMesh:
-    path: Packages/CoreMesh # relative to repo root
+  swift-crypto:
+    url: https://github.com/apple/swift-crypto.git
+    from: "2.0.0"
 options:
-  bundleIdPrefix: com.carter
+  bundleIdPrefix: com.carter.bitchat
   deploymentTarget:
     iOS: 16.0
     macOS: 13.0
   createIntermediateGroups: true
-
+  
 settings:
   MARKETING_VERSION: 1.0.0
   CURRENT_PROJECT_VERSION: 1
-
+  
 targets:
   bitchat_iOS:
     type: application
     platform: iOS
-    sources:
+    sources: 
       - bitchat
+      - Packages/CoreMesh/Sources/CoreMesh
     resources:
       - bitchat/Assets.xcassets
       - bitchat/LaunchScreen.storyboard
@@ -46,7 +48,7 @@ targets:
           - CFBundleURLSchemes:
               - bitchat
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: bitchat
+      PRODUCT_BUNDLE_IDENTIFIER: com.carter.bitchat
       PRODUCT_NAME: bitchat
       INFOPLIST_FILE: bitchat/Info.plist
       ENABLE_PREVIEWS: YES
@@ -56,20 +58,21 @@ targets:
       CODE_SIGN_STYLE: Automatic
       CODE_SIGNING_REQUIRED: YES
       CODE_SIGNING_ALLOWED: YES
-      DEVELOPMENT_TEAM: BQYSQ48JA9
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
       CODE_SIGN_ENTITLEMENTS: bitchat/bitchat.entitlements
     dependencies:
-      - package: CoreMesh
+      - package: swift-crypto
+        product: Crypto
       - target: bitchatShareExtension
         embed: true
-
+        
   bitchat_macOS:
     type: application
     platform: macOS
-    sources:
+    sources: 
       - bitchat
+      - Packages/CoreMesh/Sources/CoreMesh
     resources:
       - bitchat/Assets.xcassets
     info:
@@ -85,7 +88,7 @@ targets:
           - CFBundleURLSchemes:
               - bitchat
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: bitchat
+      PRODUCT_BUNDLE_IDENTIFIER: com.carter.bitchat
       PRODUCT_NAME: bitchat
       INFOPLIST_FILE: bitchat/Info.plist
       ENABLE_PREVIEWS: YES
@@ -94,11 +97,13 @@ targets:
       CODE_SIGN_STYLE: Automatic
       CODE_SIGNING_REQUIRED: YES
       CODE_SIGNING_ALLOWED: YES
-      DEVELOPMENT_TEAM: BQYSQ48JA9
       ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
       ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
-      CODE_SIGN_ENTITLEMENTS: bitchat/bitchat.entitlements
-
+      CODE_SIGN_ENTITLEMENTS: bitchat/bitchat-macOS.entitlements
+    dependencies:
+      - package: swift-crypto
+        product: Crypto
+        
   bitchatShareExtension:
     type: app-extension
     platform: iOS
@@ -119,27 +124,25 @@ targets:
               NSExtensionActivationSupportsWebURLWithMaxCount: 1
               NSExtensionActivationSupportsImageWithMaxCount: 1
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: bitchat.ShareExtension
+      PRODUCT_BUNDLE_IDENTIFIER: com.carter.bitchat.ShareExtension
       INFOPLIST_FILE: bitchatShareExtension/Info.plist
       SWIFT_VERSION: 5.0
       IPHONEOS_DEPLOYMENT_TARGET: 16.0
       CODE_SIGN_STYLE: Automatic
       CODE_SIGNING_REQUIRED: YES
       CODE_SIGNING_ALLOWED: YES
-      DEVELOPMENT_TEAM: BQYSQ48JA9
       CODE_SIGN_ENTITLEMENTS: bitchatShareExtension/bitchatShareExtension.entitlements
       CODE_SIGN_ALLOW_ENTITLEMENTS_MODIFICATION: YES
 
   bitchatTests_iOS:
     type: bundle.unit-test
     platform: iOS
-    sources:
+    sources: 
       - bitchatTests
     dependencies:
-      - package: CoreMesh
       - target: bitchat_iOS
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: bitchat.tests
+      PRODUCT_BUNDLE_IDENTIFIER: com.carter.bitchat.tests
       INFOPLIST_FILE: bitchatTests/Info.plist
       SWIFT_VERSION: 5.0
       IPHONEOS_DEPLOYMENT_TARGET: 16.0
@@ -148,17 +151,16 @@ targets:
       CODE_SIGN_STYLE: Automatic
       CODE_SIGNING_REQUIRED: YES
       CODE_SIGNING_ALLOWED: YES
-      DEVELOPMENT_TEAM: BQYSQ48JA9
-
+      
   bitchatTests_macOS:
     type: bundle.unit-test
     platform: macOS
-    sources:
+    sources: 
       - bitchatTests
     dependencies:
       - target: bitchat_macOS
     settings:
-      PRODUCT_BUNDLE_IDENTIFIER: bitchat.tests
+      PRODUCT_BUNDLE_IDENTIFIER: com.carter.bitchat.tests
       INFOPLIST_FILE: bitchatTests/Info.plist
       SWIFT_VERSION: 5.0
       MACOSX_DEPLOYMENT_TARGET: 13.0
@@ -167,7 +169,6 @@ targets:
       CODE_SIGN_STYLE: Automatic
       CODE_SIGNING_REQUIRED: YES
       CODE_SIGNING_ALLOWED: YES
-      DEVELOPMENT_TEAM: BQYSQ48JA9
 
 schemes:
   bitchat (iOS):
@@ -189,7 +190,7 @@ schemes:
       config: Debug
     archive:
       config: Release
-
+      
   bitchat (macOS):
     build:
       targets:

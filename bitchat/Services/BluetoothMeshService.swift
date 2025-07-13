@@ -16,18 +16,7 @@ import IOKit.ps
 import UIKit
 #endif
 
-import CoreMesh   // ✅ gives access to HopLogger, PacketTTL, etc.
-
-
-// Extension for hex encoding
-extension Data {
-    func hexEncodedString() -> String {
-        if self.isEmpty {
-            return ""
-        }
-        return self.map { String(format: "%02x", $0) }.joined()
-    }
-}
+// CoreMesh classes are now compiled directly into the target
 
 class BluetoothMeshService: NSObject {
     static let serviceUUID = CBUUID(string: "F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C")
