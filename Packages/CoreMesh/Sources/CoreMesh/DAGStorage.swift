@@ -366,6 +366,30 @@ public final class SQLiteDAGStorage: DAGStorage {
             )
         }
     }
+    
+    /// Reset all DAG data (for testing/cleanup purposes)
+    public func resetAllData() throws {
+        try queue.sync {
+            print("🗑️  Resetting all DAG data...")
+            
+            // Drop tables
+            let result = sqlite3_exec(db, "DROP TABLE IF EXISTS transactions", nil, nil, nil)
+            if result != SQLITE_OK {
+                let error = String(cString: sqlite3_errmsg(db))
+                print("⚠️  Failed to drop transactions table: \(error)")
+            }
+            
+            // Clear tips
+            tipUpdateLock.lock()
+            currentTips.removeAll()
+            tipUpdateLock.unlock()
+            
+            // Recreate tables
+            try createTables()
+            
+            print("✅ DAG database reset complete")
+        }
+    }
 }
 
 // MARK: - Error Types

@@ -93,6 +93,8 @@ class BluetoothMeshService: NSObject {
     // Transaction processor for relay rewards
     private weak var transactionProcessor: TransactionProcessor?
     
+    // Transaction processing is now handled by ChatViewModel
+    
     // Peer list update debouncing
     private var peerListUpdateTimer: Timer?
     private let peerListUpdateDebounceInterval: TimeInterval = 0.1  // 100ms debounce for more responsive updates
@@ -255,6 +257,10 @@ class BluetoothMeshService: NSObject {
     // Public method to get peer's public key data
     func getPeerPublicKey(_ peerID: String) -> Data? {
         return encryptionService.getPeerIdentityKey(peerID)
+    }
+    
+    func getIdentityPublicKey() -> Curve25519.Signing.PublicKey {
+        return encryptionService.getIdentityPublicKey()
     }
     
     override init() {
@@ -572,8 +578,7 @@ class BluetoothMeshService: NSObject {
                     print("🔨 PoW computed for low-fee broadcast message")
                 }
                 
-                // Create relay transaction for this message
-                self.createRelayTransaction(for: messageData, fee: actualFee, isPrivate: false)
+                // Transaction already created in ChatViewModel - no need to duplicate
                 
                 // Use unified message type with broadcast recipient
                 let packet = BitchatPacket(
@@ -693,8 +698,7 @@ class BluetoothMeshService: NSObject {
                     print("🔨 PoW computed for low-fee private message")
                 }
                 
-                // Create relay transaction for this private message
-                self.createRelayTransaction(for: encryptedPayload, fee: actualFee, isPrivate: true)
+                // Transaction already created in ChatViewModel - no need to duplicate
                 
                 // Create packet with recipient ID for proper routing
                 let packet = BitchatPacket(
@@ -1623,8 +1627,12 @@ class BluetoothMeshService: NSObject {
                                          Double.random(in: 0...1) < relayProb
                         
                         if shouldRelay {
-                            // Award relay reward to this node for forwarding the message
-                            self.awardRelayReward(for: packet, relayNodePeerID: self.myPeerID)
+                            // Only award relay rewards if we have other peers to actually relay to
+                            // In a 2-device network, receiving a message shouldn't earn a relay reward
+                            if self.activePeers.count > 1 {
+                                // Award relay reward to this node for forwarding the message
+                                self.awardRelayReward(for: packet, relayNodePeerID: self.myPeerID)
+                            }
                             
                             // Add random delay to prevent collision storms
                             let delay = Double.random(in: minMessageDelay...maxMessageDelay)
@@ -1753,8 +1761,12 @@ class BluetoothMeshService: NSObject {
                                      Double.random(in: 0...1) < relayProb
                     
                     if shouldRelay {
-                        // Award relay reward to this node for forwarding the private message
-                        self.awardRelayReward(for: packet, relayNodePeerID: self.myPeerID)
+                        // Only award relay rewards if we have other peers to actually relay to
+                        // In a 2-device network, receiving a message shouldn't earn a relay reward
+                        if self.activePeers.count > 1 {
+                            // Award relay reward to this node for forwarding the private message
+                            self.awardRelayReward(for: packet, relayNodePeerID: self.myPeerID)
+                        }
                         
                         // Add random delay to prevent collision storms
                         let delay = Double.random(in: minMessageDelay...maxMessageDelay)
@@ -3345,55 +3357,5 @@ extension BluetoothMeshService {
         // or creating a new enhanced packet format
     }
     
-    /// Create relay transaction for message fees
-    /// - Parameters:
-    ///   - messageData: The message payload
-    ///   - fee: Fee amount in µRLT
-    ///   - isPrivate: Whether this is a private message
-    private func createRelayTransaction(for messageData: Data, fee: UInt32, isPrivate: Bool) {
-        guard let transactionProcessor = transactionProcessor else {
-            print("⚠️ No transaction processor available for relay transaction")
-            return
-        }
-        
-        print("🔍 Transaction processor connected: \(type(of: transactionProcessor))")
-        
-        do {
-            // Get sender signing private key (needed for transaction creation)
-            let senderPrivateKey = encryptionService.getSigningPrivateKey()
-            
-            print("💳 Creating relay transaction: fee \(fee)µRLT, \(isPrivate ? "private" : "broadcast") message")
-            
-            // Create and process relay transaction
-            let signedTx = try transactionProcessor.createMessageTransaction(
-                feePerHop: fee,
-                senderPrivateKey: senderPrivateKey,
-                messagePayload: messageData
-            )
-            
-            // First, deduct the fee from sender's wallet
-            let walletManager = transactionProcessor.getWalletManager()
-            do {
-                try walletManager.spendTokens(
-                    from: senderPrivateKey.publicKey,
-                    amount: UInt64(fee),
-                    transactionId: signedTx.transaction.id,
-                    description: "Message fee (\(isPrivate ? "private" : "broadcast"))"
-                )
-                print("💸 Deducted \(fee)µRLT fee from sender wallet")
-            } catch {
-                print("⚠️  Could not deduct fee from wallet: \(error)")
-                // Continue anyway - the transaction is still valid
-            }
-            
-            // Process the transaction to add it to DAG (skip self-rewards for locally originated transactions)
-            try transactionProcessor.processTransaction(signedTx, isLocallyOriginated: true)
-            
-            print("✅ Relay transaction created and processed: \(signedTx.transaction.id.hexString.prefix(8))...")
-            print("💰 Transaction fee: \(fee)µRLT deducted from sender")
-            
-        } catch {
-            print("❌ Error creating relay transaction: \(error)")
-        }
-    }
+    // Transaction creation is now handled by ChatViewModel to avoid duplication
 }

@@ -48,6 +48,9 @@ class ChatViewModel: ObservableObject {
     @Published var channelKeys: [String: SymmetricKey] = [:]  // channel -> derived encryption key
     @Published var passwordProtectedChannels: Set<String> = []  // Set of channels that require passwords
     @Published var channelCreators: [String: String] = [:]  // channel -> creator peerID
+    
+    // Wallet update notification
+    @Published var walletUpdateTrigger = false
     @Published var channelKeyCommitments: [String: String] = [:]  // channel -> SHA256(derivedKey) for verification
     @Published var showPasswordPrompt: Bool = false
     @Published var passwordPromptChannel: String? = nil
@@ -1026,8 +1029,20 @@ class ChatViewModel: ObservableObject {
                         messagePayload: messageData
                     )
                     
+                    // First, deduct the fee from sender's wallet
+                    try walletManager.spendTokens(
+                        from: senderKey.publicKey,
+                        amount: UInt64(feeCalculation.hopFee),
+                        transactionId: transaction.transaction.id,
+                        description: "Message fee (broadcast)"
+                    )
+                    print("💸 Deducted \(feeCalculation.hopFee)µRLT fee from sender wallet")
+                    
                     // Process the transaction to add it to DAG
-                    try processor.processTransaction(transaction)
+                    try processor.processTransaction(transaction, isLocallyOriginated: true)
+                    
+                    // Notify UI about wallet update
+                    notifyWalletUpdated()
                     
                     // Log cost information
                     print("💰 Message Cost Analysis:")
@@ -1128,8 +1143,20 @@ class ChatViewModel: ObservableObject {
                     messagePayload: messageData
                 )
                 
+                // First, deduct the fee from sender's wallet
+                try walletManager.spendTokens(
+                    from: senderKey.publicKey,
+                    amount: UInt64(feeCalculation.hopFee),
+                    transactionId: transaction.transaction.id,
+                    description: "Message fee (private)"
+                )
+                print("💸 Deducted \(feeCalculation.hopFee)µRLT fee from sender wallet")
+                
                 // Process the transaction to add it to DAG
-                try processor.processTransaction(transaction)
+                try processor.processTransaction(transaction, isLocallyOriginated: true)
+                
+                // Notify UI about wallet update
+                notifyWalletUpdated()
                 
                 // Log cost information for private messages
                 print("🔒 Private Message Cost Analysis (to \(recipientNickname)):")
@@ -1985,11 +2012,65 @@ class ChatViewModel: ObservableObject {
                     return
                 }
                 do {
+                    // Get current device's identity key for debugging
+                    let devicePublicKey = self.meshService.getIdentityPublicKey()
+                    let deviceKeyHash = devicePublicKey.rawRepresentation.prefix(8).hexEncodedString()
+                    print("🔍 Current device wallet: \(deviceKeyHash)")
+                    
+                    // Get device-specific wallet info
+                    do {
+                        let deviceBalance = try self.walletManager.getBalance(for: devicePublicKey)
+                        let deviceTransactions = try self.walletManager.getTransactionHistory(for: devicePublicKey, limit: 5)
+                        print("🔍 Device wallet balance: \(deviceBalance)µRLT, transactions: \(deviceTransactions.count)")
+                        
+                        // Debug: Show device transactions
+                        for (index, tx) in deviceTransactions.enumerated() {
+                            let txHash = Data(tx.transactionId).prefix(8).hexEncodedString()
+                            print("🔍 Device tx \(index): \(txHash) \(tx.amount)µRLT (\(tx.type.rawValue)) - \(tx.description)")
+                        }
+                    } catch {
+                        print("🔍 Error getting device wallet info: \(error)")
+                    }
+                    
                     let stats = try self.walletManager.getStatistics()
                     continuation.resume(returning: stats)
                 } catch {
                     continuation.resume(throwing: error)
                 }
+            }
+        }
+    }
+    
+    /// Notify that wallet has been updated (for UI refresh)
+    func notifyWalletUpdated() {
+        print("🔔 ChatViewModel.notifyWalletUpdated() called, toggling trigger")
+        walletUpdateTrigger.toggle()
+        print("🔔 Wallet update trigger is now: \(walletUpdateTrigger)")
+    }
+    
+    /// Reset all CoreMesh data (wallets and DAG) for testing/cleanup
+    func resetCoreSystemData() {
+        Task {
+            do {
+                print("🗑️  Resetting all CoreMesh data...")
+                
+                // Reset wallet data
+                try walletManager.resetAllData()
+                
+                // Reset DAG data
+                if let dagStorage = dagStorage as? SQLiteDAGStorage {
+                    try dagStorage.resetAllData()
+                }
+                
+                print("✅ All CoreMesh data reset complete")
+                
+                // Trigger wallet UI update
+                await MainActor.run {
+                    notifyWalletUpdated()
+                }
+                
+            } catch {
+                print("❌ Failed to reset CoreMesh data: \(error)")
             }
         }
     }

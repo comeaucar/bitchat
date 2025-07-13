@@ -57,13 +57,15 @@ func main() {
             walletManager: walletManager
         )
         let feeCalculator = FeeCalculator()
+        let proofOfWork = ProofOfWork()
         
         // Create CLI explorer
         let explorer = CLIExplorer(
             dagStorage: dagStorage,
             walletManager: walletManager,
             transactionProcessor: transactionProcessor,
-            feeCalculator: feeCalculator
+            feeCalculator: feeCalculator,
+            proofOfWork: proofOfWork
         )
         
         // Get command line arguments

@@ -71,6 +71,9 @@ struct WalletView: View {
                         
                         // Wallet Info
                         walletInfoCard()
+                        
+                        // Temporary reset button for testing/cleanup
+                        resetDataCard()
                     }
                 }
                 .padding()
@@ -101,6 +104,10 @@ struct WalletView: View {
         }
         .foregroundColor(textColor)
         .onAppear {
+            loadWalletStats()
+        }
+        .onReceive(viewModel.$walletUpdateTrigger) { trigger in
+            print("🔔 WalletView received wallet update trigger: \(trigger)")
             loadWalletStats()
         }
     }
@@ -222,15 +229,18 @@ struct WalletView: View {
     }
     
     private func loadWalletStats() {
+        print("🔔 WalletView.loadWalletStats() called")
         Task {
             do {
                 let stats = try await viewModel.getWalletStatistics()
                 await MainActor.run {
+                    print("🔔 Loaded wallet stats - Balance: \(stats.totalBalance)µRLT, Transactions: \(stats.transactionCount)")
                     self.walletStats = stats
                     self.isLoading = false
                 }
             } catch {
                 await MainActor.run {
+                    print("❌ Failed to load wallet stats: \(error)")
                     self.errorMessage = "Failed to load wallet data: \(error.localizedDescription)"
                     self.isLoading = false
                 }
@@ -245,6 +255,58 @@ struct WalletView: View {
         formatter.maximumFractionDigits = 6
         formatter.minimumFractionDigits = 0
         return formatter.string(from: NSNumber(value: rlt)) ?? "0"
+    }
+    
+    private func resetDataCard() -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "trash.circle")
+                    .font(.system(size: 16))
+                    .foregroundColor(.red)
+                
+                Text("Reset Data")
+                    .font(.headline)
+                    .fontWeight(.bold)
+                    .foregroundColor(.red)
+                
+                Spacer()
+            }
+            
+            Text("Reset all wallet and transaction data for testing. This will:")
+                .font(.caption)
+                .foregroundColor(textColor.opacity(0.8))
+            
+            VStack(alignment: .leading, spacing: 4) {
+                Text("• Clear all transaction history")
+                Text("• Reset wallet balances")
+                Text("• Clear DAG storage")
+                Text("• Start fresh with new wallet")
+            }
+            .font(.caption2)
+            .foregroundColor(textColor.opacity(0.7))
+            
+            Button(action: {
+                viewModel.resetCoreSystemData()
+            }) {
+                HStack {
+                    Image(systemName: "trash")
+                    Text("Reset All Data")
+                }
+                .foregroundColor(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.red)
+                .cornerRadius(8)
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        .padding()
+        .background(cardBackgroundColor)
+        .cornerRadius(12)
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.red.opacity(0.3), lineWidth: 1)
+        )
     }
 }
 

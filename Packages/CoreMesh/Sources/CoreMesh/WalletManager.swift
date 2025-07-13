@@ -54,57 +54,63 @@ public final class WalletManager {
             if let sqlPtr = sqlite3_column_text(stmt, 0) {
                 let sql = String(cString: sqlPtr)
                 
-                // Check if the UNIQUE constraint exists
-                if !sql.contains("UNIQUE(public_key, transaction_id)") {
-                    print("🔄 Migrating database schema to add UNIQUE constraint...")
+                // Check if we need to migrate to the new schema (no synthetic id, composite PK)
+                if sql.contains("id TEXT PRIMARY KEY") {
+                    print("🔄 Migrating database schema to use composite primary key...")
+                    print("🗑️  Dropping old table and recreating with new schema (development mode)")
                     
-                    // Drop the old table and recreate it
-                    let dropQuery = "DROP TABLE IF EXISTS wallet_transactions_old"
-                    sqlite3_exec(db, dropQuery, nil, nil, nil)
+                    // Disable foreign keys temporarily for easier cleanup
+                    sqlite3_exec(db, "PRAGMA foreign_keys = OFF", nil, nil, nil)
                     
-                    // Rename current table to backup
-                    let renameQuery = "ALTER TABLE wallet_transactions RENAME TO wallet_transactions_old"
-                    let renameResult = sqlite3_exec(db, renameQuery, nil, nil, nil)
-                    
-                    if renameResult == SQLITE_OK {
-                        // Create new table with constraint
-                        let createNewTable = """
-                            CREATE TABLE wallet_transactions (
-                                id TEXT PRIMARY KEY,
-                                public_key BLOB NOT NULL,
-                                transaction_id BLOB NOT NULL,
-                                amount_micro_rlt INTEGER NOT NULL,
-                                transaction_type TEXT NOT NULL,
-                                created_at INTEGER NOT NULL,
-                                description TEXT,
-                                UNIQUE(public_key, transaction_id)
-                            )
-                        """
+                    // Try to drop the table, if it fails, reset everything
+                    let dropResult = sqlite3_exec(db, "DROP TABLE IF EXISTS wallet_transactions", nil, nil, nil)
+                    if dropResult != SQLITE_OK {
+                        print("⚠️  Failed to drop table, resetting entire database...")
+                        try resetAllData()
                         
-                        let createResult = sqlite3_exec(db, createNewTable, nil, nil, nil)
-                        if createResult == SQLITE_OK {
-                            // Copy data from old table, handling duplicates
-                            let copyQuery = """
-                                INSERT OR IGNORE INTO wallet_transactions 
-                                SELECT * FROM wallet_transactions_old
-                            """
-                            
-                            let copyResult = sqlite3_exec(db, copyQuery, nil, nil, nil)
-                            if copyResult == SQLITE_OK {
-                                // Drop old table
-                                let dropOldQuery = "DROP TABLE wallet_transactions_old"
-                                sqlite3_exec(db, dropOldQuery, nil, nil, nil)
-                                
-                                print("✅ Database migration completed successfully")
-                            } else {
-                                print("❌ Failed to copy data during migration")
-                            }
-                        } else {
-                            print("❌ Failed to create new table during migration")
-                        }
-                    } else {
-                        print("❌ Failed to rename table during migration")
+                        // Re-enable foreign keys and recreate tables
+                        sqlite3_exec(db, "PRAGMA foreign_keys = ON", nil, nil, nil)
+                        try createTables()
+                        print("✅ Database completely reset and recreated")
+                        return
                     }
+                    
+                    // Recreate with new schema
+                    let createNewTable = """
+                        CREATE TABLE wallet_transactions (
+                            public_key BLOB NOT NULL,
+                            transaction_id BLOB NOT NULL,
+                            amount_micro_rlt INTEGER NOT NULL,
+                            transaction_type TEXT NOT NULL,
+                            created_at INTEGER NOT NULL,
+                            description TEXT,
+                            PRIMARY KEY (public_key, transaction_id)
+                        )
+                    """
+                    
+                    guard sqlite3_exec(db, createNewTable, nil, nil, nil) == SQLITE_OK else {
+                        // If this fails too, just reset everything
+                        print("⚠️  Failed to create new table, resetting entire database...")
+                        try resetAllData()
+                        sqlite3_exec(db, "PRAGMA foreign_keys = ON", nil, nil, nil)
+                        try createTables()
+                        print("✅ Database completely reset and recreated")
+                        return
+                    }
+                    
+                    // Recreate indexes
+                    let createIndexes = """
+                        CREATE INDEX IF NOT EXISTS idx_transactions_public_key ON wallet_transactions(public_key);
+                        CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON wallet_transactions(created_at);
+                        CREATE INDEX IF NOT EXISTS idx_transactions_type ON wallet_transactions(transaction_type);
+                    """
+                    
+                    sqlite3_exec(db, createIndexes, nil, nil, nil) // Don't fail if indexes fail
+                    
+                    // Re-enable foreign keys
+                    sqlite3_exec(db, "PRAGMA foreign_keys = ON", nil, nil, nil)
+                    
+                    print("✅ Database migration completed successfully (fresh start)")
                 } else {
                     print("✅ Database schema is up to date")
                 }
@@ -126,14 +132,13 @@ public final class WalletManager {
         // Table for transaction history
         let createTransactionsTable = """
             CREATE TABLE IF NOT EXISTS wallet_transactions (
-                id TEXT PRIMARY KEY,
                 public_key BLOB NOT NULL,
                 transaction_id BLOB NOT NULL,
                 amount_micro_rlt INTEGER NOT NULL,
                 transaction_type TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
                 description TEXT,
-                UNIQUE(public_key, transaction_id)
+                PRIMARY KEY (public_key, transaction_id)
             )
         """
         
@@ -143,7 +148,6 @@ public final class WalletManager {
             CREATE INDEX IF NOT EXISTS idx_transactions_public_key ON wallet_transactions(public_key);
             CREATE INDEX IF NOT EXISTS idx_transactions_created_at ON wallet_transactions(created_at);
             CREATE INDEX IF NOT EXISTS idx_transactions_type ON wallet_transactions(transaction_type);
-            CREATE INDEX IF NOT EXISTS idx_transactions_tx_id ON wallet_transactions(transaction_id);
         """
         
         var result = sqlite3_exec(db, createWalletsTable, nil, nil, nil)
@@ -533,7 +537,7 @@ public final class WalletManager {
     ) throws -> [WalletTransaction] {
         return try queue.sync {
             let query = """
-                SELECT id, transaction_id, amount_micro_rlt, transaction_type, created_at, description
+                SELECT transaction_id, amount_micro_rlt, transaction_type, created_at, description
                 FROM wallet_transactions
                 WHERE public_key = ?
                 ORDER BY created_at DESC
@@ -554,18 +558,22 @@ public final class WalletManager {
             var transactions: [WalletTransaction] = []
             
             while sqlite3_step(stmt) == SQLITE_ROW {
-                let id = String(cString: sqlite3_column_text(stmt, 0))
-                let transactionIdData = Data(bytes: sqlite3_column_blob(stmt, 1), count: Int(sqlite3_column_bytes(stmt, 1)))
-                let amount = UInt64(sqlite3_column_int64(stmt, 2))
-                let typeString = String(cString: sqlite3_column_text(stmt, 3))
-                let createdAt = sqlite3_column_int64(stmt, 4)
-                let description = String(cString: sqlite3_column_text(stmt, 5))
+                let transactionIdData = Data(bytes: sqlite3_column_blob(stmt, 0), count: Int(sqlite3_column_bytes(stmt, 0)))
+                let amount = UInt64(sqlite3_column_int64(stmt, 1))
+                let typeString = String(cString: sqlite3_column_text(stmt, 2))
+                let createdAt = sqlite3_column_int64(stmt, 3)
+                let description = String(cString: sqlite3_column_text(stmt, 4))
                 
                 let transactionId = SHA256Digest(data: transactionIdData)
                 let type = WalletTransactionType(rawValue: typeString) ?? .unknown
                 
+                // Generate composite ID for backwards compatibility
+                let keyHash = pubKeyData.prefix(8).hexEncodedString()
+                let txHash = transactionIdData.prefix(8).hexEncodedString()
+                let compositeId = "\(keyHash)-\(txHash)"
+                
                 let transaction = WalletTransaction(
-                    id: id,
+                    id: compositeId,
                     transactionId: transactionId,
                     amount: amount,
                     type: type,
@@ -628,6 +636,103 @@ public final class WalletManager {
                 transactionCount = Int(sqlite3_column_int(countStmt, 0))
             }
             
+            print("📊 WalletManager.getStatistics() - Total balance: \(totalBalance)µRLT, Transaction count: \(transactionCount)")
+            
+            // Show wallet counts first
+            let walletCountQuery = "SELECT COUNT(DISTINCT public_key) FROM wallets"
+            var walletCountStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, walletCountQuery, -1, &walletCountStmt, nil) == SQLITE_OK {
+                defer { sqlite3_finalize(walletCountStmt) }
+                if sqlite3_step(walletCountStmt) == SQLITE_ROW {
+                    let walletCount = sqlite3_column_int(walletCountStmt, 0)
+                    print("📊 Total wallets in database: \(walletCount)")
+                }
+            }
+            
+            // Show wallet-specific statistics
+            let walletStatsQuery = """
+                SELECT w.public_key, w.balance_micro_rlt, COUNT(wt.transaction_id) as tx_count
+                FROM wallets w 
+                LEFT JOIN wallet_transactions wt ON w.public_key = wt.public_key
+                GROUP BY w.public_key, w.balance_micro_rlt
+                ORDER BY w.balance_micro_rlt DESC
+            """
+            var walletStatsStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, walletStatsQuery, -1, &walletStatsStmt, nil) == SQLITE_OK {
+                defer { sqlite3_finalize(walletStatsStmt) }
+                print("📊 Per-wallet statistics:")
+                while sqlite3_step(walletStatsStmt) == SQLITE_ROW {
+                    if let pubKeyData = sqlite3_column_blob(walletStatsStmt, 0) {
+                        let pubKeyBytes = Data(bytes: pubKeyData, count: Int(sqlite3_column_bytes(walletStatsStmt, 0)))
+                        let walletHash = pubKeyBytes.prefix(8).hexEncodedString()
+                        let balance = sqlite3_column_int64(walletStatsStmt, 1)
+                        let txCount = sqlite3_column_int(walletStatsStmt, 2)
+                        print("   📊 Wallet \(walletHash): \(balance)µRLT, \(txCount) transactions")
+                    }
+                }
+            }
+            
+            // Debug: Show recent transactions grouped by wallet with more detailed query
+            let debugQuery = """
+                SELECT transaction_id, amount_micro_rlt, transaction_type, public_key, created_at, description 
+                FROM wallet_transactions 
+                ORDER BY created_at DESC LIMIT 15
+            """
+            var debugStmt: OpaquePointer?
+            if sqlite3_prepare_v2(db, debugQuery, -1, &debugStmt, nil) == SQLITE_OK {
+                defer { sqlite3_finalize(debugStmt) }
+                print("📊 Recent transactions (all wallets):")
+                var rowCount = 0
+                while sqlite3_step(debugStmt) == SQLITE_ROW {
+                    rowCount += 1
+                    if let txIdData = sqlite3_column_blob(debugStmt, 0) {
+                        let txIdBytes = Data(bytes: txIdData, count: Int(sqlite3_column_bytes(debugStmt, 0)))
+                        let txHash = txIdBytes.prefix(8).hexEncodedString()
+                        let amount = sqlite3_column_int64(debugStmt, 1)
+                        let timestamp = sqlite3_column_int64(debugStmt, 4)
+                        
+                        let type: String
+                        if let typePtr = sqlite3_column_text(debugStmt, 2) {
+                            type = String(cString: typePtr)
+                        } else {
+                            type = "NULL"
+                        }
+                        
+                        let walletHash: String
+                        if let pubKeyData = sqlite3_column_blob(debugStmt, 3) {
+                            let pubKeyBytes = Data(bytes: pubKeyData, count: Int(sqlite3_column_bytes(debugStmt, 3)))
+                            walletHash = pubKeyBytes.prefix(8).hexEncodedString()
+                        } else {
+                            walletHash = "unknown"
+                        }
+                        
+                        let desc: String
+                        if let descPtr = sqlite3_column_text(debugStmt, 5) {
+                            desc = String(cString: descPtr)
+                        } else {
+                            desc = "NULL"
+                        }
+                        
+                        let date = Date(timeIntervalSince1970: TimeInterval(timestamp))
+                        let formatter = DateFormatter()
+                        formatter.dateFormat = "HH:mm:ss"
+                        let timeStr = formatter.string(from: date)
+                        
+                        print("   📊 [\(timeStr)] \(txHash): \(amount)µRLT (\(type)) wallet:\(walletHash) desc:\(desc)")
+                    }
+                }
+                print("📊 Total transaction rows found: \(rowCount)")
+                
+                // Also show count for the current device's wallet specifically
+                let deviceWalletQuery = "SELECT COUNT(*) FROM wallet_transactions WHERE public_key = ?"
+                var deviceStmt: OpaquePointer?
+                if sqlite3_prepare_v2(db, deviceWalletQuery, -1, &deviceStmt, nil) == SQLITE_OK {
+                    defer { sqlite3_finalize(deviceStmt) }
+                    // This won't work here since we don't have the device public key in this context
+                    // But we can show counts per wallet
+                }
+            }
+            
             // Get reward count
             let rewardCountQuery = "SELECT COUNT(*) FROM wallet_transactions WHERE transaction_type = 'reward'"
             var rewardStmt: OpaquePointer?
@@ -663,73 +768,70 @@ public final class WalletManager {
         let keyHash = publicKey.rawRepresentation.prefix(8).hexEncodedString()
         let txHash = Data(transactionId).prefix(8).hexEncodedString()
         
-        // First check if this transaction already exists for this public key
-        let checkQuery = """
-            SELECT 1 FROM wallet_transactions 
-            WHERE public_key = ? AND transaction_id = ? 
-            LIMIT 1
-        """
-        
-        var checkStmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, checkQuery, -1, &checkStmt, nil) == SQLITE_OK else {
-            throw WalletError.databaseError("Failed to prepare transaction check query")
-        }
-        
-        defer { sqlite3_finalize(checkStmt) }
-        
         let pubKeyData = publicKey.rawRepresentation
         let txIdData = Data(transactionId)
+        let timestamp = Int64(Date().timeIntervalSince1970)
         
-        sqlite3_bind_blob(checkStmt, 1, pubKeyData.withUnsafeBytes { $0.baseAddress }, Int32(pubKeyData.count), nil)
-        sqlite3_bind_blob(checkStmt, 2, txIdData.withUnsafeBytes { $0.baseAddress }, Int32(txIdData.count), nil)
-        
-        // If transaction already exists, just return without error
-        if sqlite3_step(checkStmt) == SQLITE_ROW {
-            print("⚠️  Transaction \(txHash) already recorded for wallet \(keyHash), skipping duplicate")
-            return
-        }
-        
-        // Insert the new transaction record
         let query = """
-            INSERT OR IGNORE INTO wallet_transactions (id, public_key, transaction_id, amount_micro_rlt, transaction_type, created_at, description)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO wallet_transactions
+                (public_key, transaction_id, amount_micro_rlt, transaction_type, created_at, description)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(public_key, transaction_id) DO NOTHING
         """
         
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, query, -1, &stmt, nil) == SQLITE_OK else {
-            throw WalletError.databaseError("Failed to prepare transaction record")
+            let errorMsg = String(cString: sqlite3_errmsg(db))
+            throw WalletError.databaseError("Failed to prepare transaction record: \(errorMsg)")
         }
         
         defer { sqlite3_finalize(stmt) }
         
-        let id = UUID().uuidString
-        let timestamp = Int64(Date().timeIntervalSince1970)
+        sqlite3_bind_blob(stmt, 1, pubKeyData.withUnsafeBytes { $0.baseAddress }, Int32(pubKeyData.count), nil)
+        sqlite3_bind_blob(stmt, 2, txIdData.withUnsafeBytes { $0.baseAddress }, Int32(txIdData.count), nil)
+        sqlite3_bind_int64(stmt, 3, Int64(amount))
+        sqlite3_bind_text(stmt, 4, type.rawValue, -1, nil)
+        sqlite3_bind_int64(stmt, 5, timestamp)
+        sqlite3_bind_text(stmt, 6, description, -1, nil)
         
-        sqlite3_bind_text(stmt, 1, id, -1, nil)
-        sqlite3_bind_blob(stmt, 2, pubKeyData.withUnsafeBytes { $0.baseAddress }, Int32(pubKeyData.count), nil)
-        sqlite3_bind_blob(stmt, 3, txIdData.withUnsafeBytes { $0.baseAddress }, Int32(txIdData.count), nil)
-        sqlite3_bind_int64(stmt, 4, Int64(amount))
-        sqlite3_bind_text(stmt, 5, type.rawValue, -1, nil)
-        sqlite3_bind_int64(stmt, 6, timestamp)
-        sqlite3_bind_text(stmt, 7, description, -1, nil)
-        
-        let stepResult = sqlite3_step(stmt)
-        guard stepResult == SQLITE_DONE else {
+        guard sqlite3_step(stmt) == SQLITE_DONE else {
             let errorMsg = String(cString: sqlite3_errmsg(db))
-            let errorCode = sqlite3_errcode(db)
-            
-            // Check if it's a constraint error (likely duplicate)
-            if errorCode == SQLITE_CONSTRAINT {
-                print("⚠️  Constraint violation when recording transaction \(txHash) for wallet \(keyHash): \(errorMsg)")
-                // This is likely a duplicate transaction, which is acceptable in a distributed system
-                return
-            } else {
-                print("❌ Failed to record transaction \(txHash) for wallet \(keyHash): \(errorMsg) (code: \(errorCode))")
-                throw WalletError.databaseError("Failed to record transaction: \(errorMsg)")
-            }
+            throw WalletError.databaseError("Failed to record transaction: \(errorMsg)")
         }
         
-        print("✅ Recorded transaction \(txHash) for wallet \(keyHash): \(amount)µRLT (\(type.rawValue))")
+        if sqlite3_changes(db) == 0 {
+            // Duplicate silently ignored
+            print("⚠️  Transaction \(txHash) already recorded for wallet \(keyHash), skipping duplicate")
+            return
+        }
+        
+        print("✅ Recorded \(type.rawValue) \(amount)µRLT for wallet \(keyHash), tx \(txHash)")
+    }
+    
+    /// Reset all wallet data (for testing/cleanup purposes)
+    public func resetAllData() throws {
+        try queue.sync {
+            print("🗑️  Resetting all wallet data...")
+            
+            // Drop all tables
+            let dropTables = [
+                "DROP TABLE IF EXISTS wallet_transactions",
+                "DROP TABLE IF EXISTS wallets"
+            ]
+            
+            for dropQuery in dropTables {
+                let result = sqlite3_exec(db, dropQuery, nil, nil, nil)
+                if result != SQLITE_OK {
+                    let error = String(cString: sqlite3_errmsg(db))
+                    print("⚠️  Failed to drop table: \(error)")
+                }
+            }
+            
+            // Recreate tables
+            try createTables()
+            
+            print("✅ Wallet database reset complete")
+        }
     }
 }
 

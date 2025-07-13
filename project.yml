@@ -19,13 +19,15 @@ targets:
     type: application
     platform: iOS
     sources: 
-      - bitchat
+      - path: bitchat
+        excludes:
+          - "Info-*.plist"
       - Packages/CoreMesh/Sources/CoreMesh
     resources:
       - bitchat/Assets.xcassets
       - bitchat/LaunchScreen.storyboard
     info:
-      path: bitchat/Info.plist
+      path: bitchat/Info-iOS.plist
       properties:
         CFBundleDisplayName: bitchat
         CFBundleShortVersionString: $(MARKETING_VERSION)
@@ -38,6 +40,9 @@ targets:
         UILaunchStoryboardName: LaunchScreen
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         UISupportedInterfaceOrientations~ipad:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationPortraitUpsideDown
@@ -50,7 +55,7 @@ targets:
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.carter.bitchat
       PRODUCT_NAME: bitchat
-      INFOPLIST_FILE: bitchat/Info.plist
+      INFOPLIST_FILE: bitchat/Info-iOS.plist
       ENABLE_PREVIEWS: YES
       SWIFT_VERSION: 5.0
       IPHONEOS_DEPLOYMENT_TARGET: 16.0
@@ -72,12 +77,14 @@ targets:
     type: application
     platform: macOS
     sources: 
-      - bitchat
+      - path: bitchat
+        excludes:
+          - "Info-*.plist"
       - Packages/CoreMesh/Sources/CoreMesh
     resources:
       - bitchat/Assets.xcassets
     info:
-      path: bitchat/Info.plist
+      path: bitchat/Info-macOS.plist
       properties:
         CFBundleDisplayName: bitchat
         CFBundleShortVersionString: $(MARKETING_VERSION)
@@ -91,7 +98,7 @@ targets:
     settings:
       PRODUCT_BUNDLE_IDENTIFIER: com.carter.bitchat
       PRODUCT_NAME: bitchat
-      INFOPLIST_FILE: bitchat/Info.plist
+      INFOPLIST_FILE: bitchat/Info-macOS.plist
       ENABLE_PREVIEWS: YES
       SWIFT_VERSION: 5.0
       MACOSX_DEPLOYMENT_TARGET: 13.0
