@@ -1,4 +1,5 @@
 import Foundation
+import Crypto
 
 /// Minimal representation of a relay transaction (no signature yet).
 public struct RelayTx: Equatable, Hashable {

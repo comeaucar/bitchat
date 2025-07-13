@@ -3,21 +3,26 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 63;
+	objectVersion = 54;
 	objects = {
 
 /* Begin PBXBuildFile section */
 		0245710AEAA58AD0A1425234 /* OptimizedBloomFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB043CA5EEB9AC8B07D61E97 /* OptimizedBloomFilter.swift */; };
 		055368CEF4231459674C1CAA /* DAGStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39AB1BCFCA083760AB91B4AF /* DAGStorage.swift */; };
 		0DAFF1DDE9BA83FF648D5AB3 /* BitchatMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FA8FF26ABDC1C642A8C7AE5 /* BitchatMessageTests.swift */; };
+		0EDBD9B90A73A50B137F15B0 /* BridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13E6428CB9885C020C5E42FB /* BridgeService.swift */; };
 		10E68BB889356219189E38EC /* BitchatApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF625BB3AD919322C01A46B2 /* BitchatApp.swift */; };
 		17901751FD8010AFC8E750F2 /* bitchatShareExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 61F92EBA29C47C0FCC482F1F /* bitchatShareExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		19BFDA892EBD1D155C4143B0 /* HopLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EA73BB900BB6A459DDFF7FD /* HopLogger.swift */; };
+		1C00C67EB1249346626346B2 /* RouteOptimizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B597BBA07CC576EC4B7ABD1 /* RouteOptimizer.swift */; };
+		1CFA1B310A3DE48AF56C85C2 /* RewardDistributor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DF7C523D0AD638051BA1F9D /* RewardDistributor.swift */; };
 		1D9674FA5F998503831DC281 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A08E03AA0C63E97C91749AEC /* ContentView.swift */; };
 		1F48A8CEEE9399D1EBD08F0C /* OptimizedBloomFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB043CA5EEB9AC8B07D61E97 /* OptimizedBloomFilter.swift */; };
+		215ADFFE5601EECD074A6CD3 /* FeeBeaconManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B43D8C6BB5BE8300E311FB /* FeeBeaconManager.swift */; };
 		24F17B1446E13F42652B7B08 /* PasswordProtectedChannelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 036A1A705AAF9EC21F4354BE /* PasswordProtectedChannelTests.swift */; };
 		2E71E320EA921498C57E023B /* BitchatMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FA8FF26ABDC1C642A8C7AE5 /* BitchatMessageTests.swift */; };
 		31D147471B9F4E2815352DDA /* LinkPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC141774F6671FCDC347DC7 /* LinkPreviewView.swift */; };
+		32D69C7A4B4ED520E7EE22CD /* FeeBeaconManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B43D8C6BB5BE8300E311FB /* FeeBeaconManager.swift */; };
 		3A3BFAF169F1A00745DFF8C2 /* HopLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4EA73BB900BB6A459DDFF7FD /* HopLogger.swift */; };
 		3EE336D150427F736F32B56C /* Crypto in Frameworks */ = {isa = PBXBuildFile; productRef = 40EA1E91086516575F148BD6 /* Crypto */; };
 		4020B7AB37B800CF344D451F /* RelayTx.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA2D967B5C9D9A20E7B8B841 /* RelayTx.swift */; };
@@ -27,6 +32,7 @@
 		4BE1D6BBD118D049CF41E1C6 /* TransactionProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E7297A48370F32321AD901 /* TransactionProcessor.swift */; };
 		4E778E5A414571ACAC2A0F01 /* MessageRetentionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 67A85BFDDE65B4CD8BDF6DDB /* MessageRetentionService.swift */; };
 		522DA362058BB7D7E0491DEE /* PacketHeaderV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B9CD2EEE6F7A4EFDA8B2544 /* PacketHeaderV2.swift */; };
+		55EA69FF638B398AB4365731 /* AnchoringService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BAF7E47D3AF3234FCF02E51 /* AnchoringService.swift */; };
 		55FFAE757899BF4BEA0EABFD /* TransactionProcessor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1E7297A48370F32321AD901 /* TransactionProcessor.swift */; };
 		5D95F2BFBE257A1225998389 /* BatteryOptimizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED176FF3B274E35C2D827894 /* BatteryOptimizer.swift */; };
 		5F83BD9FA23810F0262B9CE7 /* RelayTx.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA2D967B5C9D9A20E7B8B841 /* RelayTx.swift */; };
@@ -59,8 +65,10 @@
 		B0CA7796B2B2AC2B33F84548 /* CompressionUtil.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F149C43D1915831B60FE09 /* CompressionUtil.swift */; };
 		B82CC302A8ED5C17846B02A9 /* WalletManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568678C6B709971F478230B7 /* WalletManager.swift */; };
 		B95EDA250E2E2A3FBCE08DED /* WalletManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568678C6B709971F478230B7 /* WalletManager.swift */; };
+		BA79AD39746C0FA336EBCEF3 /* BridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13E6428CB9885C020C5E42FB /* BridgeService.swift */; };
 		BCCFEDC1EBE59323C3C470BF /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 3A69677D382F1C3D5ED03F7D /* Assets.xcassets */; };
 		C0A80BA73EC1A372B9338E3C /* BatteryOptimizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED176FF3B274E35C2D827894 /* BatteryOptimizer.swift */; };
+		C25541FD244B1638A610D03C /* AnchoringService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5BAF7E47D3AF3234FCF02E51 /* AnchoringService.swift */; };
 		C891B08AA651F6690706EAEB /* FeeCalculator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD00D10CCAC49CAD8BDDE61E /* FeeCalculator.swift */; };
 		C91FDE97070433E6CFE95C55 /* BloomFilterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EB3A8FE16333ED12FCB8ACB /* BloomFilterTests.swift */; };
 		C99763A4761567F587D21688 /* MessageRetryService.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA4D7595A613F7ED3B386132 /* MessageRetryService.swift */; };
@@ -74,6 +82,8 @@
 		DEC5C589C69BA028271926FC /* PacketTTL.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAC7FB679C44373C5653E18A /* PacketTTL.swift */; };
 		E4B9F4A5232EA1D5DB989C77 /* CLIExplorer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E5BC9120845C0B8092DF0A8 /* CLIExplorer.swift */; };
 		E65BBB6544FE0159F3C6C3A8 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 95F16C3A4A5621C74461D8D3 /* LaunchScreen.storyboard */; };
+		E879EBFD68C18E6B72B354E4 /* RouteOptimizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B597BBA07CC576EC4B7ABD1 /* RouteOptimizer.swift */; };
+		EC2AD7FFBB8D6F5E13A573C2 /* RewardDistributor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DF7C523D0AD638051BA1F9D /* RewardDistributor.swift */; };
 		F00B713D5053617FB5F3F1BE /* MessagePaddingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DE9CDF66D4E52D268851048 /* MessagePaddingTests.swift */; };
 		F455F011B3B648ADA233F998 /* BinaryProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2136C3E22D02D4A8DBE7EAB /* BinaryProtocol.swift */; };
 		F61035FF949B5420953D88B9 /* PacketTTL.swift in Sources */ = {isa = PBXBuildFile; fileRef = EAC7FB679C44373C5653E18A /* PacketTTL.swift */; };
@@ -124,6 +134,8 @@
 		03C57F452B55FD0FD8F51421 /* bitchatTests_macOS.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = bitchatTests_macOS.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		12B9C3EDF3BC73D3BC106DA4 /* DeliveryTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveryTracker.swift; sourceTree = "<group>"; };
 		136696FC4436A02D98CE6A77 /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
+		13E6428CB9885C020C5E42FB /* BridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeService.swift; sourceTree = "<group>"; };
+		1DF7C523D0AD638051BA1F9D /* RewardDistributor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RewardDistributor.swift; sourceTree = "<group>"; };
 		1E5BC9120845C0B8092DF0A8 /* CLIExplorer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CLIExplorer.swift; sourceTree = "<group>"; };
 		1EB3A8FE16333ED12FCB8ACB /* BloomFilterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BloomFilterTests.swift; sourceTree = "<group>"; };
 		229F17B68CFF7AB1BC91C847 /* BitchatProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BitchatProtocol.swift; sourceTree = "<group>"; };
@@ -140,17 +152,20 @@
 		53D535D9CE0B875F47402290 /* BinaryProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BinaryProtocolTests.swift; sourceTree = "<group>"; };
 		568678C6B709971F478230B7 /* WalletManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WalletManager.swift; sourceTree = "<group>"; };
 		5B9CD2EEE6F7A4EFDA8B2544 /* PacketHeaderV2.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketHeaderV2.swift; sourceTree = "<group>"; };
-		61F92EBA29C47C0FCC482F1F /* bitchatShareExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = bitchatShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		5BAF7E47D3AF3234FCF02E51 /* AnchoringService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnchoringService.swift; sourceTree = "<group>"; };
+		61F92EBA29C47C0FCC482F1F /* bitchatShareExtension.appex */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = "wrapper.app-extension"; path = bitchatShareExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		67A85BFDDE65B4CD8BDF6DDB /* MessageRetentionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageRetentionService.swift; sourceTree = "<group>"; };
 		6DC1563390A15C042D059CF9 /* EncryptionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EncryptionService.swift; sourceTree = "<group>"; };
 		763E0DBA9492A654FC0CDCB9 /* AppInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppInfoView.swift; sourceTree = "<group>"; };
+		7B597BBA07CC576EC4B7ABD1 /* RouteOptimizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RouteOptimizer.swift; sourceTree = "<group>"; };
 		8DE9CDF66D4E52D268851048 /* MessagePaddingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessagePaddingTests.swift; sourceTree = "<group>"; };
-		8F3A7C058C2C8E1A06C8CF8B /* bitchat_macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = bitchat_macOS.app; path = bitchat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		8F3A7C058C2C8E1A06C8CF8B /* bitchat_macOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bitchat_macOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		95F16C3A4A5621C74461D8D3 /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
-		96D0D41CA19EE5A772AA8434 /* bitchat.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bitchat.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		96D0D41CA19EE5A772AA8434 /* bitchat_iOS.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = bitchat_iOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9AC141774F6671FCDC347DC7 /* LinkPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LinkPreviewView.swift; sourceTree = "<group>"; };
 		A08E03AA0C63E97C91749AEC /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A2136C3E22D02D4A8DBE7EAB /* BinaryProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BinaryProtocol.swift; sourceTree = "<group>"; };
+		A8B43D8C6BB5BE8300E311FB /* FeeBeaconManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeeBeaconManager.swift; sourceTree = "<group>"; };
 		AA4D7595A613F7ED3B386132 /* MessageRetryService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MessageRetryService.swift; sourceTree = "<group>"; };
 		BD00D10CCAC49CAD8BDDE61E /* FeeCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeeCalculator.swift; sourceTree = "<group>"; };
 		C0DB1DE27F0AAB5092663E8E /* bitchatTests_iOS.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = bitchatTests_iOS.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -260,7 +275,7 @@
 		9F37F9F2C353B58AC809E93B /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				96D0D41CA19EE5A772AA8434 /* bitchat.app */,
+				96D0D41CA19EE5A772AA8434 /* bitchat_iOS.app */,
 				8F3A7C058C2C8E1A06C8CF8B /* bitchat_macOS.app */,
 				61F92EBA29C47C0FCC482F1F /* bitchatShareExtension.appex */,
 				C0DB1DE27F0AAB5092663E8E /* bitchatTests_iOS.xctest */,
@@ -314,14 +329,19 @@
 		C5EE5CC27561850DE668271D /* CoreMesh */ = {
 			isa = PBXGroup;
 			children = (
+				5BAF7E47D3AF3234FCF02E51 /* AnchoringService.swift */,
+				13E6428CB9885C020C5E42FB /* BridgeService.swift */,
 				1E5BC9120845C0B8092DF0A8 /* CLIExplorer.swift */,
 				2E4F1BC6BFFF5E80E9B8DA0B /* CoreMesh.swift */,
 				39AB1BCFCA083760AB91B4AF /* DAGStorage.swift */,
+				A8B43D8C6BB5BE8300E311FB /* FeeBeaconManager.swift */,
 				BD00D10CCAC49CAD8BDDE61E /* FeeCalculator.swift */,
 				4EA73BB900BB6A459DDFF7FD /* HopLogger.swift */,
 				5B9CD2EEE6F7A4EFDA8B2544 /* PacketHeaderV2.swift */,
 				EAC7FB679C44373C5653E18A /* PacketTTL.swift */,
 				EA2D967B5C9D9A20E7B8B841 /* RelayTx.swift */,
+				1DF7C523D0AD638051BA1F9D /* RewardDistributor.swift */,
+				7B597BBA07CC576EC4B7ABD1 /* RouteOptimizer.swift */,
 				F1E7297A48370F32321AD901 /* TransactionProcessor.swift */,
 				568678C6B709971F478230B7 /* WalletManager.swift */,
 			);
@@ -437,7 +457,7 @@
 				3B69548C8EAFC786B9F5A11C /* Crypto */,
 			);
 			productName = bitchat_iOS;
-			productReference = 96D0D41CA19EE5A772AA8434 /* bitchat.app */;
+			productReference = 96D0D41CA19EE5A772AA8434 /* bitchat_iOS.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -450,18 +470,23 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					0576A29205865664C0937536 = {
+						DevelopmentTeam = BQYSQ48JA9;
 						ProvisioningStyle = Automatic;
 					};
 					47FF23248747DD7CB666CB91 = {
+						DevelopmentTeam = BQYSQ48JA9;
 						ProvisioningStyle = Automatic;
 					};
 					57CA17A36A2532A6CFF367BB = {
+						DevelopmentTeam = BQYSQ48JA9;
 						ProvisioningStyle = Automatic;
 					};
 					6CB97DF2EA57234CB3E563B8 = {
+						DevelopmentTeam = BQYSQ48JA9;
 						ProvisioningStyle = Automatic;
 					};
 					AF077EA0474EDEDE2C72716C = {
+						DevelopmentTeam = BQYSQ48JA9;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -479,6 +504,7 @@
 			packageReferences = (
 				0D19ED8C5147390C37DA3540 /* XCRemoteSwiftPackageReference "swift-crypto" */,
 			);
+			preferredProjectObjectVersion = 54;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -525,12 +551,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C25541FD244B1638A610D03C /* AnchoringService.swift in Sources */,
 				AD11E46940D742AEAF547EB2 /* AppInfoView.swift in Sources */,
 				C0A80BA73EC1A372B9338E3C /* BatteryOptimizer.swift in Sources */,
 				4B747085D07A1BCE0F5BA612 /* BinaryProtocol.swift in Sources */,
 				6E7761E21C99F28AE2F9BE5F /* BitchatApp.swift in Sources */,
 				923027D6F2F417AFA2488127 /* BitchatProtocol.swift in Sources */,
 				7A50E2F04A3515A7E90EEAE4 /* BluetoothMeshService.swift in Sources */,
+				0EDBD9B90A73A50B137F15B0 /* BridgeService.swift in Sources */,
 				E4B9F4A5232EA1D5DB989C77 /* CLIExplorer.swift in Sources */,
 				D450CF41F207BDE1A1AAA56E /* ChatViewModel.swift in Sources */,
 				B0CA7796B2B2AC2B33F84548 /* CompressionUtil.swift in Sources */,
@@ -539,6 +567,7 @@
 				055368CEF4231459674C1CAA /* DAGStorage.swift in Sources */,
 				8DCEEA289EF7C49E7CD38B08 /* DeliveryTracker.swift in Sources */,
 				739429DFDE5C5829CF70DA7D /* EncryptionService.swift in Sources */,
+				215ADFFE5601EECD074A6CD3 /* FeeBeaconManager.swift in Sources */,
 				C891B08AA651F6690706EAEB /* FeeCalculator.swift in Sources */,
 				3A3BFAF169F1A00745DFF8C2 /* HopLogger.swift in Sources */,
 				FB8819B4C84FAFEF5C36B216 /* KeychainManager.swift in Sources */,
@@ -550,6 +579,8 @@
 				522DA362058BB7D7E0491DEE /* PacketHeaderV2.swift in Sources */,
 				DEC5C589C69BA028271926FC /* PacketTTL.swift in Sources */,
 				5F83BD9FA23810F0262B9CE7 /* RelayTx.swift in Sources */,
+				EC2AD7FFBB8D6F5E13A573C2 /* RewardDistributor.swift in Sources */,
+				1C00C67EB1249346626346B2 /* RouteOptimizer.swift in Sources */,
 				55FFAE757899BF4BEA0EABFD /* TransactionProcessor.swift in Sources */,
 				B95EDA250E2E2A3FBCE08DED /* WalletManager.swift in Sources */,
 			);
@@ -559,12 +590,14 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				55EA69FF638B398AB4365731 /* AnchoringService.swift in Sources */,
 				ABAF130D88561F4A646F0430 /* AppInfoView.swift in Sources */,
 				5D95F2BFBE257A1225998389 /* BatteryOptimizer.swift in Sources */,
 				F455F011B3B648ADA233F998 /* BinaryProtocol.swift in Sources */,
 				10E68BB889356219189E38EC /* BitchatApp.swift in Sources */,
 				6DE056E1EE9850E9FBF50157 /* BitchatProtocol.swift in Sources */,
 				D948085736ED8E736C1DE3B0 /* BluetoothMeshService.swift in Sources */,
+				BA79AD39746C0FA336EBCEF3 /* BridgeService.swift in Sources */,
 				DDE40CC4D0878CC8CD827DA4 /* CLIExplorer.swift in Sources */,
 				7576A357B278E5733E9D9F33 /* ChatViewModel.swift in Sources */,
 				7DCA0DBCB8884E3B31C7BCE3 /* CompressionUtil.swift in Sources */,
@@ -573,6 +606,7 @@
 				6EFCB2E89F7CFC083D511E62 /* DAGStorage.swift in Sources */,
 				CD0AE423F03AC52BAFC16834 /* DeliveryTracker.swift in Sources */,
 				DDA1DFAB1FF7AADE52DC0F53 /* EncryptionService.swift in Sources */,
+				32D69C7A4B4ED520E7EE22CD /* FeeBeaconManager.swift in Sources */,
 				AC5D626BA0A7482D194D087E /* FeeCalculator.swift in Sources */,
 				19BFDA892EBD1D155C4143B0 /* HopLogger.swift in Sources */,
 				8F737CE0435792CC2AD65FCB /* KeychainManager.swift in Sources */,
@@ -584,6 +618,8 @@
 				AE6D6B26B47BC80E860EB2C4 /* PacketHeaderV2.swift in Sources */,
 				F61035FF949B5420953D88B9 /* PacketTTL.swift in Sources */,
 				4020B7AB37B800CF344D451F /* RelayTx.swift in Sources */,
+				1CFA1B310A3DE48AF56C85C2 /* RewardDistributor.swift in Sources */,
+				E879EBFD68C18E6B72B354E4 /* RouteOptimizer.swift in Sources */,
 				4BE1D6BBD118D049CF41E1C6 /* TransactionProcessor.swift in Sources */,
 				B82CC302A8ED5C17846B02A9 /* WalletManager.swift in Sources */,
 			);
@@ -641,6 +677,7 @@
 				CODE_SIGNING_ALLOWED = YES;
 				CODE_SIGNING_REQUIRED = YES;
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = BQYSQ48JA9;
 				INFOPLIST_FILE = bitchatTests/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -663,6 +700,7 @@
 				CODE_SIGNING_ALLOWED = YES;
 				CODE_SIGNING_REQUIRED = YES;
 				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = BQYSQ48JA9;
 				INFOPLIST_FILE = bitchatTests/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -686,6 +724,7 @@
 				CODE_SIGNING_REQUIRED = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = BQYSQ48JA9;
 				INFOPLIST_FILE = bitchatTests/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -758,6 +797,7 @@
 				CODE_SIGNING_REQUIRED = YES;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = BQYSQ48JA9;
 				INFOPLIST_FILE = bitchatTests/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -809,6 +849,7 @@
 				CODE_SIGN_ENTITLEMENTS = "bitchat/bitchat-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = BQYSQ48JA9;
 				ENABLE_PREVIEWS = YES;
 				INFOPLIST_FILE = bitchat/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -891,6 +932,7 @@
 				CODE_SIGN_ENTITLEMENTS = "bitchat/bitchat-macOS.entitlements";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				DEVELOPMENT_TEAM = BQYSQ48JA9;
 				ENABLE_PREVIEWS = YES;
 				INFOPLIST_FILE = bitchat/Info.plist;
 				LD_RUNPATH_SEARCH_PATHS = (

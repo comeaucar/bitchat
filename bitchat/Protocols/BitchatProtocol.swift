@@ -446,6 +446,9 @@ protocol BitchatDelegate: AnyObject {
     func didReceiveDeliveryAck(_ ack: DeliveryAck)
     func didReceiveReadReceipt(_ receipt: ReadReceipt)
     func didUpdateMessageDeliveryStatus(_ messageID: String, status: DeliveryStatus)
+    
+    // Fee beacon updates
+    func didUpdateNetworkFees()
 }
 
 // Provide default implementation to make it effectively optional
@@ -480,6 +483,10 @@ extension BitchatDelegate {
     }
     
     func didUpdateMessageDeliveryStatus(_ messageID: String, status: DeliveryStatus) {
+        // Default empty implementation
+    }
+    
+    func didUpdateNetworkFees() {
         // Default empty implementation
     }
 }

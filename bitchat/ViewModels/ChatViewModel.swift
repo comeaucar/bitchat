@@ -54,6 +54,22 @@ class ChatViewModel: ObservableObject {
     @Published var savedChannels: Set<String> = []  // Channels saved for message retention
     @Published var retentionEnabledChannels: Set<String> = []  // Channels where owner enabled retention for all members
     
+    // Route optimization support
+    @Published var selectedRoutingPreference: RoutingPreference = .balanced
+    @Published var routeRecommendations: [RoutingPreference: OptimizedRoute] = [:]
+    @Published var isRouteOptimizationEnabled: Bool = false
+    
+    // Anchoring protocol support
+    @Published var anchoredRoots: [AnchoredRoot] = []
+    @Published var lastAnchoringTime: Date? = nil
+    @Published var dagIntegrityStatus: DAGIntegrityResult? = nil
+    
+    // Bridge infrastructure support
+    @Published var bridgeStatus: BridgeStatus = .offline
+    @Published var availableBridges: [BridgeNode] = []
+    @Published var currentBridge: BridgeNode? = nil
+    @Published var connectivityStats: ConnectivityStatistics = ConnectivityStatistics()
+    
     let meshService = BluetoothMeshService()
     private let feeCalculator = FeeCalculator()
     
@@ -89,6 +105,14 @@ class ChatViewModel: ObservableObject {
             print("❌ Failed to initialize TransactionProcessor: \(error)")
             return nil
         }
+    }()
+    
+    private lazy var anchoringService: AnchoringService = {
+        return AnchoringService(dagStorage: dagStorage)
+    }()
+    
+    private lazy var bridgeService: BridgeService = {
+        return BridgeService()
     }()
     private let userDefaults = UserDefaults.standard
     private let nicknameKey = "bitchat.nickname"
@@ -127,8 +151,23 @@ class ChatViewModel: ObservableObject {
         // Start mesh service immediately
         meshService.startServices()
         
+        // Set up fee beacon manager
+        meshService.setupFeeBeaconManager(feeCalculator: feeCalculator)
+        
+        // Set up transaction processor for relay rewards
+        if let processor = transactionProcessor {
+            meshService.setTransactionProcessor(processor)
+        }
+        
         // Set up message retry service
         MessageRetryService.shared.meshService = meshService
+        
+        // Set up anchoring service
+        anchoringService.delegate = self
+        
+        // Set up bridge service
+        bridgeService.delegate = self
+        bridgeService.startBridgeService()
         
         // Request notification permission
         NotificationService.shared.requestAuthorization()
@@ -148,6 +187,16 @@ class ChatViewModel: ObservableObject {
         // Set up periodic network statistics logging (every 60 seconds)
         Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
             self.logNetworkStatistics()
+        }
+        
+        // Set up periodic route optimization updates (every 30 seconds)
+        Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { _ in
+            self.updateRouteOptimization()
+        }
+        
+        // Set up periodic DAG integrity checks (every 5 minutes)
+        Timer.scheduledTimer(withTimeInterval: 300.0, repeats: true) { _ in
+            self.updateDAGIntegrityStatus()
         }
         
         // Show welcome message after delay if still no peers
@@ -3293,6 +3342,9 @@ extension ChatViewModel: BitchatDelegate {
             // Explicitly notify SwiftUI that the object has changed.
             self.objectWillChange.send()
             
+            // Update route optimization when peer list changes
+            self.updateRouteOptimization()
+            
             if let currentChatPeer = self.selectedPrivateChatPeer,
                !peers.contains(currentChatPeer) {
                 self.endPrivateChat()
@@ -3407,4 +3459,315 @@ extension ChatViewModel: BitchatDelegate {
         }
     }
     
+    // MARK: - Route Optimization
+    
+    /// Update route optimization status and recommendations
+    func updateRouteOptimization() {
+        isRouteOptimizationEnabled = meshService.isRouteOptimizationAvailable()
+        
+        if isRouteOptimizationEnabled {
+            // Update route recommendations for a typical message size
+            let messageSize = 500  // Approximate average message size
+            routeRecommendations = meshService.getRouteRecommendations(messageSize: messageSize)
+        } else {
+            routeRecommendations = [:]
+        }
+    }
+    
+    /// Send message with current routing preference
+    /// - Parameters:
+    ///   - content: Message content
+    ///   - isPrivate: Whether this is a private message
+    ///   - recipientPeerID: Recipient peer ID for private messages
+    ///   - recipientNickname: Recipient nickname for private messages
+    func sendMessageWithRouting(
+        _ content: String,
+        isPrivate: Bool = false,
+        recipientPeerID: String? = nil,
+        recipientNickname: String? = nil
+    ) {
+        guard !content.isEmpty else { return }
+        
+        if isPrivate, let recipientPeerID = recipientPeerID, let recipientNickname = recipientNickname {
+            // Send private message with routing preference
+            meshService.sendMessageWithRouting(
+                content,
+                to: recipientPeerID,
+                preference: selectedRoutingPreference
+            )
+        } else {
+            // Send broadcast message with routing preference
+            meshService.sendMessageWithRouting(
+                content,
+                mentions: [],
+                channel: currentChannel,
+                preference: selectedRoutingPreference
+            )
+        }
+    }
+    
+    /// Get route cost estimate for a message
+    /// - Parameters:
+    ///   - content: Message content
+    ///   - isPrivate: Whether this is a private message
+    ///   - recipientPeerID: Recipient peer ID for private messages
+    /// - Returns: Route cost estimate in RLT
+    func getMessageCostEstimate(
+        for content: String,
+        isPrivate: Bool = false,
+        recipientPeerID: String? = nil
+    ) -> Double? {
+        guard isRouteOptimizationEnabled else { return nil }
+        
+        let messageSize = content.data(using: .utf8)?.count ?? 0
+        
+        if isPrivate, let recipientPeerID = recipientPeerID {
+            // Get optimal route for private message
+            let route = meshService.findOptimalRoute(
+                messageSize: messageSize,
+                destination: recipientPeerID,
+                preference: selectedRoutingPreference
+            )
+            return route?.costInRLT
+        } else {
+            // Get optimal route for broadcast message
+            let route = meshService.findOptimalRoute(
+                messageSize: messageSize,
+                preference: selectedRoutingPreference
+            )
+            return route?.costInRLT
+        }
+    }
+    
+    /// Update selected routing preference
+    /// - Parameter preference: New routing preference
+    func updateRoutingPreference(_ preference: RoutingPreference) {
+        selectedRoutingPreference = preference
+        updateRouteOptimization()  // Refresh recommendations
+    }
+    
+    // MARK: - Bridge Infrastructure
+    
+    /// Connect to a specific bridge node
+    func connectToBridge(_ bridgeNode: BridgeNode) {
+        bridgeService.connectToBridge(bridgeNode)
+    }
+    
+    /// Disconnect from current bridge
+    func disconnectFromBridge() {
+        bridgeService.disconnectFromCurrentBridge()
+    }
+    
+    /// Start hosting bridge service
+    func startHostingBridge() {
+        bridgeService.startHostingBridge()
+    }
+    
+    /// Stop hosting bridge service
+    func stopHostingBridge() {
+        bridgeService.stopHostingBridge()
+    }
+    
+    /// Check if device can act as a bridge
+    func canActAsBridge() -> Bool {
+        return bridgeService.canActAsBridge()
+    }
+    
+    /// Get bridge connectivity statistics
+    func getBridgeStatistics() -> BridgeStatistics {
+        let stats = bridgeService.getConnectivityStatistics()
+        return BridgeStatistics(
+            totalBridges: availableBridges.count,
+            activeBridges: availableBridges.filter { $0.quality > 0.5 }.count,
+            currentBridge: currentBridge?.id,
+            connectionSuccessRate: stats.successRate,
+            lastConnectionTime: stats.lastConnectionTime
+        )
+    }
+    
+    // MARK: - Anchoring Protocol
+    
+    /// Get DAG integrity status
+    func updateDAGIntegrityStatus() {
+        dagIntegrityStatus = anchoringService.verifyDAGIntegrity()
+    }
+    
+    /// Manually trigger anchoring
+    func performManualAnchoring() {
+        anchoringService.performAnchoring()
+    }
+    
+    /// Get anchoring statistics
+    func getAnchoringStatistics() -> AnchoringStatistics {
+        let recentAnchors = anchoringService.getRecentAnchors()
+        let confirmedAnchors = recentAnchors.filter { $0.status == .confirmed }
+        
+        return AnchoringStatistics(
+            totalAnchors: recentAnchors.count,
+            confirmedAnchors: confirmedAnchors.count,
+            lastAnchorTime: recentAnchors.first?.timestamp,
+            averageAnchoringTime: calculateAverageAnchoringTime(recentAnchors)
+        )
+    }
+    
+    private func calculateAverageAnchoringTime(_ anchors: [AnchoredRoot]) -> TimeInterval? {
+        let confirmedAnchors = anchors.filter { $0.status == .confirmed && $0.confirmationTime != nil }
+        guard !confirmedAnchors.isEmpty else { return nil }
+        
+        let totalTime = confirmedAnchors.reduce(0.0) { total, anchor in
+            guard let confirmationTime = anchor.confirmationTime else { return total }
+            return total + confirmationTime.timeIntervalSince(anchor.timestamp)
+        }
+        
+        return totalTime / Double(confirmedAnchors.count)
+    }
+    
+}
+
+// MARK: - AnchoringServiceDelegate
+
+extension ChatViewModel: AnchoringServiceDelegate {
+    func anchoringService(_ service: AnchoringService, didCreateAnchor anchor: AnchoredRoot) {
+        DispatchQueue.main.async { [weak self] in
+            self?.anchoredRoots = service.getRecentAnchors()
+            self?.lastAnchoringTime = anchor.timestamp
+            self?.updateDAGIntegrityStatus()
+        }
+    }
+    
+    func anchoringService(_ service: AnchoringService, didUpdateAnchorStatus anchor: AnchoredRoot) {
+        DispatchQueue.main.async { [weak self] in
+            self?.anchoredRoots = service.getRecentAnchors()
+            self?.updateDAGIntegrityStatus()
+            
+            // Show system message for successful anchoring
+            if anchor.status == .confirmed {
+                let systemMessage = BitchatMessage(
+                    sender: "system",
+                    content: "dag merkle root anchored to external networks ✓",
+                    timestamp: Date(),
+                    isRelay: false
+                )
+                self?.messages.append(systemMessage)
+            }
+        }
+    }
+}
+
+// MARK: - Supporting Data Structures
+
+/// Anchoring statistics for UI display
+public struct AnchoringStatistics {
+    public let totalAnchors: Int
+    public let confirmedAnchors: Int
+    public let lastAnchorTime: Date?
+    public let averageAnchoringTime: TimeInterval?
+    
+    public var confirmationRate: Double {
+        guard totalAnchors > 0 else { return 0.0 }
+        return Double(confirmedAnchors) / Double(totalAnchors)
+    }
+}
+
+// MARK: - BridgeServiceDelegate
+
+extension ChatViewModel: BridgeServiceDelegate {
+    func bridgeService(_ service: BridgeService, didUpdateStatus status: BridgeStatus) {
+        DispatchQueue.main.async { [weak self] in
+            self?.bridgeStatus = status
+            self?.connectivityStats = service.getConnectivityStatistics()
+            
+            // Show system message for bridge status changes
+            let statusMessage: String
+            switch status {
+            case .offline:
+                statusMessage = "bridge offline - no internet connection"
+            case .hasInternet:
+                statusMessage = "internet connection available"
+            case .connectedToBridge:
+                statusMessage = "connected to bridge node"
+            case .hostingBridge:
+                statusMessage = "hosting bridge for other peers"
+            }
+            
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: statusMessage,
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+    
+    func bridgeService(_ service: BridgeService, didConnectToBridge bridge: BridgeNode) {
+        DispatchQueue.main.async { [weak self] in
+            self?.currentBridge = bridge
+            self?.availableBridges = service.availableBridges
+            
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: "connected to bridge \(bridge.id) - global network access enabled",
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+    
+    func bridgeService(_ service: BridgeService, didDisconnectFromBridge bridge: BridgeNode) {
+        DispatchQueue.main.async { [weak self] in
+            self?.currentBridge = nil
+            self?.availableBridges = service.availableBridges
+            
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: "disconnected from bridge \(bridge.id)",
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+    
+    func bridgeService(_ service: BridgeService, didStartHostingBridge bridge: BridgeNode) {
+        DispatchQueue.main.async { [weak self] in
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: "started hosting bridge \(bridge.id) - helping other peers connect",
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+    
+    func bridgeService(_ service: BridgeService, didStopHostingBridge bridge: BridgeNode?) {
+        DispatchQueue.main.async { [weak self] in
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: "stopped hosting bridge service",
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+}
+
+/// Bridge statistics for UI display
+public struct BridgeStatistics {
+    public let totalBridges: Int
+    public let activeBridges: Int
+    public let currentBridge: String?
+    public let connectionSuccessRate: Double
+    public let lastConnectionTime: Date?
+    
+    public var hasActiveBridges: Bool {
+        return activeBridges > 0
+    }
+    
+    public var isConnectedToBridge: Bool {
+        return currentBridge != nil
+    }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import Crypto
 
 /// Transaction processing engine for the BitChat crypto system
 public final class TransactionProcessor {
@@ -9,6 +10,9 @@ public final class TransactionProcessor {
     // Genesis transaction - first transaction in the DAG
     private let genesisTransaction: SignedRelayTx
     
+    // Reward distributor for proper relay node rewards
+    private let rewardDistributor: RewardDistributor
+    
     // Processing statistics
     private var processedTransactionCount = 0
     private var totalFeesProcessed: UInt64 = 0
@@ -17,6 +21,9 @@ public final class TransactionProcessor {
     public init(dagStorage: DAGStorage, walletManager: WalletManager) throws {
         self.dagStorage = dagStorage
         self.walletManager = walletManager
+        
+        // Initialize reward distributor
+        self.rewardDistributor = RewardDistributor(walletManager: walletManager, dagStorage: dagStorage)
         
         // Create genesis transaction if DAG is empty
         self.genesisTransaction = try Self.createGenesisTransaction()
@@ -132,30 +139,67 @@ public final class TransactionProcessor {
     }
     
     /// Award relay rewards for processing a transaction
-    private func awardRelayRewards(for transaction: SignedRelayTx) throws {
+    /// - Parameters:
+    ///   - transaction: The transaction to process rewards for
+    ///   - relayPath: Optional relay path for proper reward distribution
+    private func awardRelayRewards(for transaction: SignedRelayTx, relayPath: [CryptoCurve25519.Signing.PublicKey]? = nil) throws {
         let feePerHop = transaction.transaction.feePerHop
         let senderPubKey = transaction.transaction.senderPub
         let keyHash = senderPubKey.rawRepresentation.prefix(8).hexEncodedString()
         let txHash = transaction.transaction.id.hexString.prefix(8)
         
+        print("🏆 Processing rewards for transaction \(txHash)")
+        
+        // If we have a relay path, distribute rewards properly
+        if let relayPath = relayPath, !relayPath.isEmpty {
+            do {
+                try rewardDistributor.distributeRelayRewards(
+                    for: transaction,
+                    relayPath: relayPath,
+                    finalRecipient: nil as CryptoCurve25519.Signing.PublicKey?
+                )
+                
+                let rewardStats = rewardDistributor.getStatistics()
+                totalRewardsAwarded = rewardStats.totalRewardsDistributed
+                
+                print("🏆 Distributed relay rewards via RewardDistributor")
+                
+            } catch {
+                print("❌ Failed to distribute relay rewards: \(error)")
+                
+                // Fall back to old behavior for sender
+                try awardFallbackReward(to: senderPubKey, transaction: transaction)
+            }
+        } else {
+            // No relay path available, award to sender as fallback
+            // This happens for locally originated transactions
+            try awardFallbackReward(to: senderPubKey, transaction: transaction)
+        }
+    }
+    
+    /// Award fallback reward to sender when no relay path is available
+    private func awardFallbackReward(to recipientPubKey: CryptoCurve25519.Signing.PublicKey, transaction: SignedRelayTx) throws {
+        let feePerHop = transaction.transaction.feePerHop
+        let keyHash = recipientPubKey.rawRepresentation.prefix(8).hexEncodedString()
+        let txHash = transaction.transaction.id.hexString.prefix(8)
+        
         // Award 1 RLT minted per hop (as per whitepaper)
         let rewardAmount = UInt64(feePerHop)
         
-        print("🏆 Awarding \(rewardAmount)µRLT to \(keyHash) for transaction \(txHash)")
+        print("🏆 Awarding fallback reward: \(rewardAmount)µRLT to \(keyHash) for transaction \(txHash)")
         
-        // Award to the sender's wallet (they paid for the transaction)
         do {
             try walletManager.awardReward(
-                to: senderPubKey,
+                to: recipientPubKey,
                 amount: rewardAmount,
                 transactionId: transaction.transaction.id
             )
             
             totalRewardsAwarded += rewardAmount
-            print("🏆 Awarded \(rewardAmount)µRLT to \(keyHash)")
+            print("🏆 Awarded fallback reward: \(rewardAmount)µRLT to \(keyHash)")
+            
         } catch {
-            // Log the error but don't fail the entire transaction
-            print("❌ Failed to award reward to \(keyHash): \(error)")
+            print("❌ Failed to award fallback reward to \(keyHash): \(error)")
             
             // If it's a wallet error, we can continue without failing the transaction
             // The transaction is still valid even if the reward fails
@@ -259,6 +303,28 @@ public final class TransactionProcessor {
             totalFeesProcessed: totalFeesProcessed,
             totalRewardsAwarded: totalRewardsAwarded,
             currentTipCount: dagStorage.getTips().count
+        )
+    }
+    
+    /// Get reward distributor for immediate relay rewards
+    public func getRewardDistributor() -> RewardDistributor {
+        return rewardDistributor
+    }
+    
+    /// Award immediate relay reward to a node
+    /// - Parameters:
+    ///   - relayNode: The public key of the relay node
+    ///   - feePerHop: The fee amount for this hop
+    ///   - transactionId: The transaction ID for tracking
+    public func awardImmediateRelayReward(
+        to relayNode: CryptoCurve25519.Signing.PublicKey,
+        feePerHop: UInt32,
+        transactionId: SHA256Digest
+    ) {
+        rewardDistributor.awardImmediateRelayReward(
+            to: relayNode,
+            feePerHop: feePerHop,
+            transactionId: transactionId
         )
     }
 }

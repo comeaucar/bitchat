@@ -1,5 +1,6 @@
 import Foundation
 import SQLite3
+import Crypto
 
 /// Wallet manager for tracking balances and transaction history
 public final class WalletManager {
