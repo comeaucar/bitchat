@@ -34,13 +34,17 @@ public final class TransactionProcessor {
     
     /// Process a new transaction (validate, add to DAG, award rewards)
     public func processTransaction(_ transaction: SignedRelayTx) throws {
+        let txHash = transaction.transaction.id.hexString.prefix(8)
+        print("🔄 Processing transaction \(txHash)...")
+        
         try processingQueue.sync {
             // 1. Validate transaction
             try validateTransaction(transaction)
             
             // 2. Check if transaction already exists
             if dagStorage.contains(transactionID: transaction.transaction.id) {
-                throw TransactionProcessingError.transactionAlreadyExists
+                print("⚠️  Transaction \(txHash) already exists in DAG, skipping processing")
+                return // Don't throw an error, just skip processing
             }
             
             // 3. Validate parent transactions exist
@@ -51,15 +55,28 @@ public final class TransactionProcessor {
             }
             
             // 4. Add to DAG
-            try dagStorage.addTransaction(transaction)
+            do {
+                try dagStorage.addTransaction(transaction)
+                print("✅ Added transaction \(txHash) to DAG")
+            } catch {
+                print("❌ Failed to add transaction \(txHash) to DAG: \(error)")
+                throw error
+            }
             
             // 5. Award relay rewards
-            try awardRelayRewards(for: transaction)
+            do {
+                try awardRelayRewards(for: transaction)
+                print("✅ Awarded relay rewards for transaction \(txHash)")
+            } catch {
+                print("❌ Failed to award relay rewards for transaction \(txHash): \(error)")
+                // Don't throw here - the transaction is still valid even if reward fails
+                // This prevents the entire transaction from failing due to wallet issues
+            }
             
             // 6. Update statistics
             updateStatistics(transaction)
             
-            print("✅ Processed transaction \(transaction.transaction.id) with fee \(transaction.transaction.feePerHop)µRLT")
+            print("✅ Processed transaction \(txHash) with fee \(transaction.transaction.feePerHop)µRLT")
         }
     }
     
@@ -118,19 +135,46 @@ public final class TransactionProcessor {
     private func awardRelayRewards(for transaction: SignedRelayTx) throws {
         let feePerHop = transaction.transaction.feePerHop
         let senderPubKey = transaction.transaction.senderPub
+        let keyHash = senderPubKey.rawRepresentation.prefix(8).hexEncodedString()
+        let txHash = transaction.transaction.id.hexString.prefix(8)
         
         // Award 1 RLT minted per hop (as per whitepaper)
         let rewardAmount = UInt64(feePerHop)
         
-        // Award to the sender's wallet (they paid for the transaction)
-        try walletManager.awardReward(
-            to: senderPubKey,
-            amount: rewardAmount,
-            transactionId: transaction.transaction.id
-        )
+        print("🏆 Awarding \(rewardAmount)µRLT to \(keyHash) for transaction \(txHash)")
         
-        totalRewardsAwarded += rewardAmount
-        print("🏆 Awarded \(rewardAmount)µRLT to \(senderPubKey.rawRepresentation.prefix(8).hexEncodedString())")
+        // Award to the sender's wallet (they paid for the transaction)
+        do {
+            try walletManager.awardReward(
+                to: senderPubKey,
+                amount: rewardAmount,
+                transactionId: transaction.transaction.id
+            )
+            
+            totalRewardsAwarded += rewardAmount
+            print("🏆 Awarded \(rewardAmount)µRLT to \(keyHash)")
+        } catch {
+            // Log the error but don't fail the entire transaction
+            print("❌ Failed to award reward to \(keyHash): \(error)")
+            
+            // If it's a wallet error, we can continue without failing the transaction
+            // The transaction is still valid even if the reward fails
+            if let walletError = error as? WalletError {
+                switch walletError {
+                case .databaseError(let msg):
+                    print("   Database error: \(msg)")
+                case .insufficientBalance:
+                    print("   Insufficient balance (shouldn't happen for rewards)")
+                case .walletNotFound:
+                    print("   Wallet not found (will be created)")
+                case .invalidTransaction:
+                    print("   Invalid transaction")
+                }
+            }
+            
+            // Re-throw the error so the caller can decide how to handle it
+            throw error
+        }
     }
     
     /// Validate a transaction's signature and structure

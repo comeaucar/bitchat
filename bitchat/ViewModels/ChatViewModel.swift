@@ -56,6 +56,11 @@ class ChatViewModel: ObservableObject {
     
     let meshService = BluetoothMeshService()
     private let feeCalculator = FeeCalculator()
+    
+    // Persistent transaction key for this device
+    private var transactionPrivateKey: CryptoCurve25519.Signing.PrivateKey?
+    private let transactionKeyKeychainKey = "bitchat.transaction.privatekey"
+    
     private lazy var dagStorage: DAGStorage = {
         do {
             let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -112,6 +117,7 @@ class ChatViewModel: ObservableObject {
         loadJoinedChannels()
         loadChannelData()
         loadBlockedUsers()
+        loadTransactionKey()  // Load persistent transaction key
         // Load saved channels state
         savedChannels = MessageRetentionService.shared.getFavoriteChannels()
         meshService.delegate = self
@@ -962,7 +968,7 @@ class ChatViewModel: ObservableObject {
             
             // Create relay transaction for the message
             if let processor = transactionProcessor,
-               let senderKey = try? CryptoCurve25519.Signing.PrivateKey() {
+               let senderKey = getTransactionKey() {
                 
                 do {
                     let transaction = try processor.createMessageTransaction(
@@ -989,6 +995,8 @@ class ChatViewModel: ObservableObject {
                 } catch {
                     print("❌ Transaction processing failed: \(error)")
                 }
+            } else {
+                print("❌ Cannot create transaction: missing processor or transaction key")
             }
             
             // Record the fee for network statistics
@@ -1062,7 +1070,7 @@ class ChatViewModel: ObservableObject {
         
         // Create relay transaction for the private message
         if let processor = transactionProcessor,
-           let senderKey = try? CryptoCurve25519.Signing.PrivateKey() {
+           let senderKey = getTransactionKey() {
             
             do {
                 let transaction = try processor.createMessageTransaction(
@@ -1085,6 +1093,8 @@ class ChatViewModel: ObservableObject {
             } catch {
                 print("❌ Private message transaction processing failed: \(error)")
             }
+        } else {
+            print("❌ Cannot create private message transaction: missing processor or transaction key")
         }
         
         // Record the fee for network statistics
@@ -1410,6 +1420,10 @@ class ChatViewModel: ObservableObject {
         // Clear all keychain passwords
         _ = KeychainManager.shared.deleteAllPasswords()
         
+        // Clear transaction key
+        _ = KeychainManager.shared.deleteTransactionKey()
+        transactionPrivateKey = nil
+        
         // Clear all retained messages
         MessageRetentionService.shared.deleteAllStoredMessages()
         savedChannels.removeAll()
@@ -1443,15 +1457,11 @@ class ChatViewModel: ObservableObject {
         // Clear selected private chat
         selectedPrivateChatPeer = nil
         
-        // Disconnect from all peers
-        meshService.emergencyDisconnectAll()
+        // Generate new transaction key for fresh start
+        generateNewTransactionKey()
         
-        // Force immediate UserDefaults synchronization
-        userDefaults.synchronize()
-        
-        // Force UI update
-        objectWillChange.send()
-        
+        // Send all-clear log message
+        print("🧹 All data cleared and reset!")
     }
     
     
@@ -1871,6 +1881,51 @@ class ChatViewModel: ObservableObject {
         }
         
         return result
+    }
+    
+    // MARK: - Transaction Key Management
+    
+    private func loadTransactionKey() {
+        // Try to load existing key from Keychain
+        if let keyData = KeychainManager.shared.getTransactionKey() {
+            do {
+                transactionPrivateKey = try CryptoCurve25519.Signing.PrivateKey(rawRepresentation: keyData)
+                let publicKeyHash = transactionPrivateKey!.publicKey.rawRepresentation.prefix(8).hexEncodedString()
+                print("🔑 Loaded existing transaction key with public key: \(publicKeyHash)")
+            } catch {
+                print("❌ Failed to load transaction key from Keychain: \(error)")
+                generateNewTransactionKey()
+            }
+        } else {
+            generateNewTransactionKey()
+        }
+    }
+    
+    private func generateNewTransactionKey() {
+        do {
+            transactionPrivateKey = try CryptoCurve25519.Signing.PrivateKey()
+            let keyData = transactionPrivateKey!.rawRepresentation
+            let success = KeychainManager.shared.saveTransactionKey(keyData)
+            
+            let publicKeyHash = transactionPrivateKey!.publicKey.rawRepresentation.prefix(8).hexEncodedString()
+            
+            if success {
+                print("🔑 Generated and saved new transaction key with public key: \(publicKeyHash)")
+            } else {
+                print("⚠️  Generated new transaction key but failed to save to Keychain: \(publicKeyHash)")
+            }
+        } catch {
+            print("❌ Failed to generate transaction key: \(error)")
+            // This is a critical error - we can't process transactions without a key
+            fatalError("Cannot generate transaction key")
+        }
+    }
+    
+    private func getTransactionKey() -> CryptoCurve25519.Signing.PrivateKey? {
+        if transactionPrivateKey == nil {
+            loadTransactionKey()
+        }
+        return transactionPrivateKey
     }
 }
 

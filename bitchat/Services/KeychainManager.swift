@@ -78,6 +78,57 @@ class KeychainManager {
         return retrieveData(forKey: "identity_\(key)")
     }
     
+    // MARK: - Transaction Key Management
+    
+    /// Save transaction private key to Keychain
+    func saveTransactionKey(_ keyData: Data) -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: "bitchat.transaction.privatekey",
+            kSecAttrService as String: "bitchat",
+            kSecValueData as String: keyData
+        ]
+        
+        // Delete any existing item first
+        SecItemDelete(query as CFDictionary)
+        
+        // Add the new item
+        let status = SecItemAdd(query as CFDictionary, nil)
+        return status == errSecSuccess
+    }
+    
+    /// Retrieve transaction private key from Keychain
+    func getTransactionKey() -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: "bitchat.transaction.privatekey",
+            kSecAttrService as String: "bitchat",
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        
+        var result: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        
+        if status == errSecSuccess {
+            return result as? Data
+        }
+        
+        return nil
+    }
+    
+    /// Delete transaction private key from Keychain
+    func deleteTransactionKey() -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrAccount as String: "bitchat.transaction.privatekey",
+            kSecAttrService as String: "bitchat"
+        ]
+        
+        let status = SecItemDelete(query as CFDictionary)
+        return status == errSecSuccess || status == errSecItemNotFound
+    }
+    
     // MARK: - Generic Operations
     
     private func save(_ value: String, forKey key: String) -> Bool {
