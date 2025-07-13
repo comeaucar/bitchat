@@ -27,6 +27,7 @@ struct ContentView: View {
     @State private var showCommandSuggestions = false
     @State private var commandSuggestions: [String] = []
     @State private var showLeaveChannelAlert = false
+    @State private var showWalletView = false
     
     private var backgroundColor: Color {
         colorScheme == .dark ? Color.black : Color.white
@@ -119,6 +120,10 @@ struct ContentView: View {
         #endif
         .sheet(isPresented: $showAppInfo) {
             AppInfoView()
+        }
+        .sheet(isPresented: $showWalletView) {
+            WalletView()
+                .environmentObject(viewModel)
         }
         .alert("Set Channel Password", isPresented: $showPasswordInput) {
             SecureField("Password", text: $passwordInput)
@@ -883,6 +888,38 @@ struct ContentView: View {
                 .background(backgroundColor.opacity(0.95))
                 
                 Divider()
+                
+                // Wallet button
+                Button(action: {
+                    showWalletView = true
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        showSidebar = false
+                        sidebarDragOffset = 0
+                    }
+                }) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "wallet.pass")
+                            .font(.system(size: 16))
+                            .foregroundColor(textColor)
+                        
+                        Text("Wallet")
+                            .font(.system(size: 16, weight: .medium, design: .monospaced))
+                            .foregroundColor(textColor)
+                        
+                        Spacer()
+                        
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 12))
+                            .foregroundColor(secondaryTextColor)
+                    }
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Color.clear)
+                
+                Divider()
+                    .padding(.vertical, 4)
             
             // Rooms and People list
             ScrollView {

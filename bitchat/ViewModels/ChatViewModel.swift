@@ -68,7 +68,7 @@ class ChatViewModel: ObservableObject {
     @Published var bridgeStatus: BridgeStatus = .offline
     @Published var availableBridges: [BridgeNode] = []
     @Published var currentBridge: BridgeNode? = nil
-    @Published var connectivityStats: ConnectivityStatistics = ConnectivityStatistics()
+    @Published var connectivityStats: ConnectivityStatistics?
     
     let meshService = BluetoothMeshService()
     private let feeCalculator = FeeCalculator()
@@ -1975,6 +1975,23 @@ class ChatViewModel: ObservableObject {
             loadTransactionKey()
         }
         return transactionPrivateKey
+    }
+    
+    func getWalletStatistics() async throws -> WalletStatistics {
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self = self else { 
+                    continuation.resume(throwing: NSError(domain: "ChatViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "ChatViewModel deallocated"]))
+                    return
+                }
+                do {
+                    let stats = try self.walletManager.getStatistics()
+                    continuation.resume(returning: stats)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
     }
 }
 

@@ -281,9 +281,11 @@ extension String {
     }
 }
 
-#Preview {
-    VStack {
-        LinkPreviewView(url: URL(string: "https://example.com")!, title: "Example Website")
-            .padding()
+struct LinkPreviewView_Previews: PreviewProvider {
+    static var previews: some View {
+        VStack {
+            LinkPreviewView(url: URL(string: "https://example.com")!, title: "Example Website")
+                .padding()
+        }
     }
 }
