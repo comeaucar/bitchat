@@ -350,6 +350,8 @@ struct FeatureRow: View {
     }
 }
 
-#Preview {
-    AppInfoView()
+struct AppInfoView_Previews: PreviewProvider {
+    static var previews: some View {
+        AppInfoView()
+    }
 }

@@ -11,6 +11,9 @@ import SwiftUI
 import Combine
 import CryptoKit
 import CommonCrypto
+#if canImport(Crypto)
+import Crypto
+#endif
 #if os(iOS)
 import UIKit
 #endif
@@ -45,13 +48,82 @@ class ChatViewModel: ObservableObject {
     @Published var channelKeys: [String: SymmetricKey] = [:]  // channel -> derived encryption key
     @Published var passwordProtectedChannels: Set<String> = []  // Set of channels that require passwords
     @Published var channelCreators: [String: String] = [:]  // channel -> creator peerID
+    
+    // Wallet update notification
+    @Published var walletUpdateTrigger = false
     @Published var channelKeyCommitments: [String: String] = [:]  // channel -> SHA256(derivedKey) for verification
     @Published var showPasswordPrompt: Bool = false
     @Published var passwordPromptChannel: String? = nil
     @Published var savedChannels: Set<String> = []  // Channels saved for message retention
     @Published var retentionEnabledChannels: Set<String> = []  // Channels where owner enabled retention for all members
     
+    // Route optimization support
+    @Published var selectedRoutingPreference: RoutingPreference = .balanced
+    @Published var routeRecommendations: [RoutingPreference: OptimizedRoute] = [:]
+    @Published var isRouteOptimizationEnabled: Bool = false
+    
+    // Anchoring protocol support
+    @Published var anchoredRoots: [AnchoredRoot] = []
+    @Published var lastAnchoringTime: Date? = nil
+    @Published var dagIntegrityStatus: DAGIntegrityResult? = nil
+    
+    // Bridge infrastructure support
+    @Published var bridgeStatus: BridgeStatus = .offline
+    @Published var availableBridges: [BridgeNode] = []
+    @Published var currentBridge: BridgeNode? = nil
+    @Published var connectivityStats: ConnectivityStatistics?
+    
+    // File transfer support
+    @Published var showFileTransferRequest = false
+    @Published var pendingFileTransferRequest: FileTransferRequest? = nil
+    
     let meshService = BluetoothMeshService()
+    private let feeCalculator = FeeCalculator()
+    
+    // Persistent transaction key for this device
+    private var transactionPrivateKey: CryptoCurve25519.Signing.PrivateKey?
+    private let transactionKeyKeychainKey = "bitchat.transaction.privatekey"
+    
+    private lazy var dagStorage: DAGStorage = {
+        do {
+            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let dbPath = documentsPath.appendingPathComponent("bitchat_dag.db").path
+            return try SQLiteDAGStorage(dbPath: dbPath, maxTransactions: 10000)
+        } catch {
+            print("❌ Failed to initialize DAGStorage: \(error)")
+            // Fallback to in-memory implementation if available
+            fatalError("Cannot initialize DAG storage")
+        }
+    }()
+    private lazy var walletManager: WalletManager = {
+        do {
+            let documentsPath = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+            let dbPath = documentsPath.appendingPathComponent("bitchat_wallet.db").path
+            return try WalletManager(dbPath: dbPath)
+        } catch {
+            print("❌ Failed to initialize WalletManager: \(error)")
+            fatalError("Cannot initialize wallet manager")
+        }
+    }()
+    private lazy var transactionProcessor: TransactionProcessor? = {
+        do {
+            return try TransactionProcessor(dagStorage: dagStorage, walletManager: walletManager)
+        } catch {
+            print("❌ Failed to initialize TransactionProcessor: \(error)")
+            return nil
+        }
+    }()
+    
+    private lazy var anchoringService: AnchoringService = {
+        return AnchoringService(dagStorage: dagStorage)
+    }()
+    
+    private lazy var bridgeService: BridgeService = {
+        return BridgeService()
+    }()
+    
+    // File transfer manager
+    @Published var fileTransferManager: FileTransferManager = FileTransferManager()
     private let userDefaults = UserDefaults.standard
     private let nicknameKey = "bitchat.nickname"
     private let favoritesKey = "bitchat.favorites"
@@ -79,17 +151,36 @@ class ChatViewModel: ObservableObject {
         loadJoinedChannels()
         loadChannelData()
         loadBlockedUsers()
+        loadTransactionKey()  // Load persistent transaction key
         // Load saved channels state
         savedChannels = MessageRetentionService.shared.getFavoriteChannels()
         meshService.delegate = self
+        
+        // Set up file transfer manager
+        fileTransferManager.setMeshService(meshService)
         
         // Log startup info
         
         // Start mesh service immediately
         meshService.startServices()
         
+        // Set up fee beacon manager
+        meshService.setupFeeBeaconManager(feeCalculator: feeCalculator)
+        
+        // Set up transaction processor for relay rewards
+        if let processor = transactionProcessor {
+            meshService.setTransactionProcessor(processor)
+        }
+        
         // Set up message retry service
         MessageRetryService.shared.meshService = meshService
+        
+        // Set up anchoring service
+        anchoringService.delegate = self
+        
+        // Set up bridge service
+        bridgeService.delegate = self
+        bridgeService.startBridgeService()
         
         // Request notification permission
         NotificationService.shared.requestAuthorization()
@@ -100,6 +191,26 @@ class ChatViewModel: ObservableObject {
             .sink { [weak self] (messageID, status) in
                 self?.updateMessageDeliveryStatus(messageID, status: status)
             }
+        
+        // Log initial CoreMesh network state
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            self.logNetworkStatistics()
+        }
+        
+        // Set up periodic network statistics logging (every 60 seconds)
+        Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { _ in
+            self.logNetworkStatistics()
+        }
+        
+        // Set up periodic route optimization updates (every 30 seconds)
+        Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { _ in
+            self.updateRouteOptimization()
+        }
+        
+        // Set up periodic DAG integrity checks (every 5 minutes)
+        Timer.scheduledTimer(withTimeInterval: 300.0, repeats: true) { _ in
+            self.updateDAGIntegrityStatus()
+        }
         
         // Show welcome message after delay if still no peers
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
@@ -905,6 +1016,68 @@ class ChatViewModel: ObservableObject {
                 }
             }
             
+            // Calculate message cost using CoreMesh
+            let messageData = content.data(using: .utf8) ?? Data()
+            let messageSize = messageData.count
+            let estimatedTTL: UInt8 = 5  // Default TTL for mesh routing
+            let priority = MessagePriority.normal
+            
+            let feeCalculation = feeCalculator.calculateFee(
+                messageSize: messageSize,
+                ttl: estimatedTTL,
+                priority: priority
+            )
+            
+            // Create relay transaction for the message
+            if let processor = transactionProcessor,
+               let senderKey = getTransactionKey() {
+                
+                do {
+                    let transaction = try processor.createMessageTransaction(
+                        feePerHop: feeCalculation.hopFee,
+                        senderPrivateKey: senderKey,
+                        messagePayload: messageData
+                    )
+                    
+                    // First, deduct the fee from sender's wallet
+                    try walletManager.spendTokens(
+                        from: senderKey.publicKey,
+                        amount: UInt64(feeCalculation.totalFee),
+                        transactionId: transaction.transaction.id,
+                        description: "Message fee (broadcast)"
+                    )
+                    print("💸 Deducted \(feeCalculation.totalFee)µRLT fee from sender wallet")
+                    
+                    // Process the transaction to add it to DAG
+                    // Pass PoW result if available for reward calculation
+                    let powResult = meshService.getLastPoWResult()
+                    try processor.processTransaction(transaction, isLocallyOriginated: true, powResult: powResult)
+                    
+                    // Notify UI about wallet update
+                    notifyWalletUpdated()
+                    
+                    // Log cost information
+                    print("💰 Message Cost Analysis:")
+                    print("   Size: \(messageSize) bytes")
+                    print("   TTL: \(estimatedTTL) hops")
+                    print("   Priority: \(priority.rawValue)")
+                    print("   Base Fee: \(feeCalculation.baseFee)µRLT")
+                    print("   Size Fee: \(feeCalculation.sizeFee)µRLT")
+                    print("   Hop Fee: \(feeCalculation.hopFee)µRLT")
+                    print("   Total Fee: \(feeCalculation.totalFee)µRLT (\(String(format: "%.6f", feeCalculation.feeInRLT)) RLT)")
+                    print("   Est. Delivery: \(String(format: "%.2f", feeCalculation.estimatedDeliveryTime))s")
+                    print("   Congestion Multiplier: \(String(format: "%.2f", feeCalculation.congestionMultiplier))x")
+                    
+                } catch {
+                    print("❌ Transaction processing failed: \(error)")
+                }
+            } else {
+                print("❌ Cannot create transaction: missing processor or transaction key")
+            }
+            
+            // Record the fee for network statistics
+            feeCalculator.recordPaidFee(feeCalculation.totalFee)
+            
             // Check if channel is password protected and encrypt if needed
             if let channel = messageChannel, channelKeys[channel] != nil {
                 // Send encrypted channel message
@@ -959,11 +1132,108 @@ class ChatViewModel: ObservableObject {
         let isFavorite = isFavorite(peerID: peerID)
         DeliveryTracker.shared.trackMessage(message, recipientID: peerID, recipientNickname: recipientNickname, isFavorite: isFavorite)
         
+        // Calculate private message cost using CoreMesh
+        let messageData = content.data(using: .utf8) ?? Data()
+        let messageSize = messageData.count
+        let estimatedTTL: UInt8 = 3  // Private messages typically use shorter routes
+        let priority = isFavorite ? MessagePriority.high : MessagePriority.normal
+        
+        let feeCalculation = feeCalculator.calculateFee(
+            messageSize: messageSize,
+            ttl: estimatedTTL,
+            priority: priority
+        )
+        
+        // Create relay transaction for the private message
+        if let processor = transactionProcessor,
+           let senderKey = getTransactionKey() {
+            
+            do {
+                let transaction = try processor.createMessageTransaction(
+                    feePerHop: feeCalculation.hopFee,
+                    senderPrivateKey: senderKey,
+                    messagePayload: messageData
+                )
+                
+                // First, deduct the fee from sender's wallet
+                try walletManager.spendTokens(
+                    from: senderKey.publicKey,
+                    amount: UInt64(feeCalculation.totalFee),
+                    transactionId: transaction.transaction.id,
+                    description: "Message fee (private)"
+                )
+                print("💸 Deducted \(feeCalculation.totalFee)µRLT fee from sender wallet")
+                
+                // Process the transaction to add it to DAG
+                // Pass PoW result if available for reward calculation
+                let powResult = meshService.getLastPoWResult()
+                try processor.processTransaction(transaction, isLocallyOriginated: true, powResult: powResult)
+                
+                // Notify UI about wallet update
+                notifyWalletUpdated()
+                
+                // Log cost information for private messages
+                print("🔒 Private Message Cost Analysis (to \(recipientNickname)):")
+                print("   Size: \(messageSize) bytes")
+                print("   TTL: \(estimatedTTL) hops")
+                print("   Priority: \(priority.rawValue) \(isFavorite ? "(favorite)" : "")")
+                print("   Total Fee: \(feeCalculation.totalFee)µRLT (\(String(format: "%.6f", feeCalculation.feeInRLT)) RLT)")
+                print("   Est. Delivery: \(String(format: "%.2f", feeCalculation.estimatedDeliveryTime))s")
+                
+            } catch {
+                print("❌ Private message transaction processing failed: \(error)")
+            }
+        } else {
+            print("❌ Cannot create private message transaction: missing processor or transaction key")
+        }
+        
+        // Record the fee for network statistics
+        feeCalculator.recordPaidFee(feeCalculation.totalFee)
+        
         // Trigger UI update
         objectWillChange.send()
         
         // Send via mesh with the same message ID
         meshService.sendPrivateMessage(content, to: peerID, recipientNickname: recipientNickname, messageID: message.id)
+    }
+    
+    // Display CoreMesh network statistics
+    func logNetworkStatistics() {
+        print("📊 CoreMesh Network Statistics:")
+        
+        // DAG Statistics
+        let dagStats = dagStorage.getStatistics()
+        print("   DAG:")
+        print("     Total Transactions: \(dagStats.totalTransactions)")
+        print("     Current Tips: \(dagStats.tipCount)")
+        print("     Total Weight: \(dagStats.totalWeight)")
+        
+        // Transaction Processing Statistics
+        if let processor = transactionProcessor {
+            let txStats = processor.getStatistics()
+            print("   Transactions:")
+            print("     Processed: \(txStats.processedTransactionCount)")
+            print("     Total Fees: \(txStats.totalFeesProcessed)µRLT")
+            print("     Total Rewards: \(txStats.totalRewardsAwarded)µRLT")
+        }
+        
+        // Wallet Statistics
+        do {
+            let walletStats = try walletManager.getStatistics()
+            print("   Wallet:")
+            print("     Total Balance: \(walletStats.totalBalance)µRLT")
+            print("     Transaction Count: \(walletStats.transactionCount)")
+            print("     Reward Count: \(walletStats.rewardCount)")
+        } catch {
+            print("   Wallet: Error getting statistics - \(error)")
+        }
+        
+        // Fee Calculator Network Conditions
+        let networkConditions = feeCalculator.getCurrentNetworkConditions()
+        print("   Network Conditions:")
+        print("     Congestion: \(String(format: "%.2f", networkConditions.congestion * 100))%")
+        print("     Avg Latency: \(String(format: "%.3f", networkConditions.averageLatency))s")
+        print("     Adaptive Base Fee: \(feeCalculator.getAdaptiveBaseFee())µRLT")
     }
     
     func startPrivateChat(with peerID: String) {
@@ -1240,6 +1510,10 @@ class ChatViewModel: ObservableObject {
         // Clear all keychain passwords
         _ = KeychainManager.shared.deleteAllPasswords()
         
+        // Clear transaction key
+        _ = KeychainManager.shared.deleteTransactionKey()
+        transactionPrivateKey = nil
+        
         // Clear all retained messages
         MessageRetentionService.shared.deleteAllStoredMessages()
         savedChannels.removeAll()
@@ -1273,15 +1547,11 @@ class ChatViewModel: ObservableObject {
         // Clear selected private chat
         selectedPrivateChatPeer = nil
         
-        // Disconnect from all peers
-        meshService.emergencyDisconnectAll()
+        // Generate new transaction key for fresh start
+        generateNewTransactionKey()
         
-        // Force immediate UserDefaults synchronization
-        userDefaults.synchronize()
-        
-        // Force UI update
-        objectWillChange.send()
-        
+        // Send all-clear log message
+        print("🧹 All data cleared and reset!")
     }
     
     
@@ -1701,6 +1971,122 @@ class ChatViewModel: ObservableObject {
         }
         
         return result
+    }
+    
+    // MARK: - Transaction Key Management
+    
+    private func loadTransactionKey() {
+        // Try to load existing key from Keychain
+        if let keyData = KeychainManager.shared.getTransactionKey() {
+            do {
+                transactionPrivateKey = try CryptoCurve25519.Signing.PrivateKey(rawRepresentation: keyData)
+                let publicKeyHash = transactionPrivateKey!.publicKey.rawRepresentation.prefix(8).hexEncodedString()
+                print("🔑 Loaded existing transaction key with public key: \(publicKeyHash)")
+            } catch {
+                print("❌ Failed to load transaction key from Keychain: \(error)")
+                generateNewTransactionKey()
+            }
+        } else {
+            generateNewTransactionKey()
+        }
+    }
+    
+    private func generateNewTransactionKey() {
+        do {
+            transactionPrivateKey = try CryptoCurve25519.Signing.PrivateKey()
+            let keyData = transactionPrivateKey!.rawRepresentation
+            let success = KeychainManager.shared.saveTransactionKey(keyData)
+            
+            let publicKeyHash = transactionPrivateKey!.publicKey.rawRepresentation.prefix(8).hexEncodedString()
+            
+            if success {
+                print("🔑 Generated and saved new transaction key with public key: \(publicKeyHash)")
+            } else {
+                print("⚠️  Generated new transaction key but failed to save to Keychain: \(publicKeyHash)")
+            }
+        } catch {
+            print("❌ Failed to generate transaction key: \(error)")
+            // This is a critical error - we can't process transactions without a key
+            fatalError("Cannot generate transaction key")
+        }
+    }
+    
+    private func getTransactionKey() -> CryptoCurve25519.Signing.PrivateKey? {
+        if transactionPrivateKey == nil {
+            loadTransactionKey()
+        }
+        return transactionPrivateKey
+    }
+    
+    func getWalletStatistics() async throws -> WalletStatistics {
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                guard let self = self else { 
+                    continuation.resume(throwing: NSError(domain: "ChatViewModel", code: -1, userInfo: [NSLocalizedDescriptionKey: "ChatViewModel deallocated"]))
+                    return
+                }
+                do {
+                    // Get current device's identity key for debugging
+                    let devicePublicKey = self.meshService.getIdentityPublicKey()
+                    let deviceKeyHash = devicePublicKey.rawRepresentation.prefix(8).hexEncodedString()
+                    print("🔍 Current device wallet: \(deviceKeyHash)")
+                    
+                    // Get device-specific wallet info
+                    do {
+                        let deviceBalance = try self.walletManager.getBalance(for: devicePublicKey)
+                        let deviceTransactions = try self.walletManager.getTransactionHistory(for: devicePublicKey, limit: 5)
+                        print("🔍 Device wallet balance: \(deviceBalance)µRLT, transactions: \(deviceTransactions.count)")
+                        
+                        // Debug: Show device transactions
+                        for (index, tx) in deviceTransactions.enumerated() {
+                            let txHash = Data(tx.transactionId).prefix(8).hexEncodedString()
+                            print("🔍 Device tx \(index): \(txHash) \(tx.amount)µRLT (\(tx.type.rawValue)) - \(tx.description)")
+                        }
+                    } catch {
+                        print("🔍 Error getting device wallet info: \(error)")
+                    }
+                    
+                    let stats = try self.walletManager.getStatistics()
+                    continuation.resume(returning: stats)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+    
+    /// Notify that wallet has been updated (for UI refresh)
+    func notifyWalletUpdated() {
+        print("🔔 ChatViewModel.notifyWalletUpdated() called, toggling trigger")
+        walletUpdateTrigger.toggle()
+        print("🔔 Wallet update trigger is now: \(walletUpdateTrigger)")
+    }
+    
+    /// Reset all CoreMesh data (wallets and DAG) for testing/cleanup
+    func resetCoreSystemData() {
+        Task {
+            do {
+                print("🗑️  Resetting all CoreMesh data...")
+                
+                // Reset wallet data
+                try walletManager.resetAllData()
+                
+                // Reset DAG data
+                if let dagStorage = dagStorage as? SQLiteDAGStorage {
+                    try dagStorage.resetAllData()
+                }
+                
+                print("✅ All CoreMesh data reset complete")
+                
+                // Trigger wallet UI update
+                await MainActor.run {
+                    notifyWalletUpdated()
+                }
+                
+            } catch {
+                print("❌ Failed to reset CoreMesh data: \(error)")
+            }
+        }
     }
 }
 
@@ -2456,6 +2842,55 @@ extension ChatViewModel: BitchatDelegate {
                 messages.append(systemMessage)
             }
             
+        case "/stats":
+            // Display CoreMesh network statistics
+            let dagStats = dagStorage.getStatistics()
+            
+            do {
+                let walletStats = try walletManager.getStatistics()
+                let networkConditions = feeCalculator.getCurrentNetworkConditions()
+                
+                var statsContent = "📊 CoreMesh Network Statistics\n"
+                statsContent += "\n🔗 DAG:\n"
+                statsContent += "  • Transactions: \(dagStats.totalTransactions)\n"
+                statsContent += "  • Tips: \(dagStats.tipCount)\n"
+                statsContent += "  • Total Weight: \(dagStats.totalWeight)\n"
+                
+                if let processor = transactionProcessor {
+                    let txStats = processor.getStatistics()
+                    statsContent += "\n💳 Transactions:\n"
+                    statsContent += "  • Processed: \(txStats.processedTransactionCount)\n"
+                    statsContent += "  • Total Fees: \(txStats.totalFeesProcessed)µRLT\n"
+                    statsContent += "  • Total Rewards: \(txStats.totalRewardsAwarded)µRLT\n"
+                }
+                
+                statsContent += "\n💰 Wallet:\n"
+                statsContent += "  • Balance: \(walletStats.totalBalance)µRLT\n"
+                statsContent += "  • Transactions: \(walletStats.transactionCount)\n"
+                statsContent += "  • Rewards: \(walletStats.rewardCount)\n"
+                
+                statsContent += "\n🌐 Network:\n"
+                statsContent += "  • Congestion: \(String(format: "%.1f", networkConditions.congestion * 100))%\n"
+                statsContent += "  • Avg Latency: \(String(format: "%.3f", networkConditions.averageLatency))s\n"
+                statsContent += "  • Base Fee: \(feeCalculator.getAdaptiveBaseFee())µRLT/hop"
+                
+                let systemMessage = BitchatMessage(
+                    sender: "system",
+                    content: statsContent,
+                    timestamp: Date(),
+                    isRelay: false
+                )
+                messages.append(systemMessage)
+            } catch {
+                let errorMessage = BitchatMessage(
+                    sender: "system",
+                    content: "📊 Error retrieving wallet statistics: \(error)",
+                    timestamp: Date(),
+                    isRelay: false
+                )
+                messages.append(errorMessage)
+            }
+            
         default:
             // Unknown command
             let systemMessage = BitchatMessage(
@@ -3019,6 +3454,9 @@ extension ChatViewModel: BitchatDelegate {
             // Explicitly notify SwiftUI that the object has changed.
             self.objectWillChange.send()
             
+            // Update route optimization when peer list changes
+            self.updateRouteOptimization()
+            
             if let currentChatPeer = self.selectedPrivateChatPeer,
                !peers.contains(currentChatPeer) {
                 self.endPrivateChat()
@@ -3133,4 +3571,368 @@ extension ChatViewModel: BitchatDelegate {
         }
     }
     
+    // MARK: - Route Optimization
+    
+    /// Update route optimization status and recommendations
+    func updateRouteOptimization() {
+        isRouteOptimizationEnabled = meshService.isRouteOptimizationAvailable()
+        
+        if isRouteOptimizationEnabled {
+            // Update route recommendations for a typical message size
+            let messageSize = 500  // Approximate average message size
+            routeRecommendations = meshService.getRouteRecommendations(messageSize: messageSize)
+        } else {
+            routeRecommendations = [:]
+        }
+    }
+    
+    /// Send message with current routing preference
+    /// - Parameters:
+    ///   - content: Message content
+    ///   - isPrivate: Whether this is a private message
+    ///   - recipientPeerID: Recipient peer ID for private messages
+    ///   - recipientNickname: Recipient nickname for private messages
+    func sendMessageWithRouting(
+        _ content: String,
+        isPrivate: Bool = false,
+        recipientPeerID: String? = nil,
+        recipientNickname: String? = nil
+    ) {
+        guard !content.isEmpty else { return }
+        
+        if isPrivate, let recipientPeerID = recipientPeerID, let recipientNickname = recipientNickname {
+            // Send private message with routing preference
+            meshService.sendMessageWithRouting(
+                content,
+                to: recipientPeerID,
+                preference: selectedRoutingPreference
+            )
+        } else {
+            // Send broadcast message with routing preference
+            meshService.sendMessageWithRouting(
+                content,
+                mentions: [],
+                channel: currentChannel,
+                preference: selectedRoutingPreference
+            )
+        }
+    }
+    
+    /// Get route cost estimate for a message
+    /// - Parameters:
+    ///   - content: Message content
+    ///   - isPrivate: Whether this is a private message
+    ///   - recipientPeerID: Recipient peer ID for private messages
+    /// - Returns: Route cost estimate in RLT
+    func getMessageCostEstimate(
+        for content: String,
+        isPrivate: Bool = false,
+        recipientPeerID: String? = nil
+    ) -> Double? {
+        guard isRouteOptimizationEnabled else { return nil }
+        
+        let messageSize = content.data(using: .utf8)?.count ?? 0
+        
+        if isPrivate, let recipientPeerID = recipientPeerID {
+            // Get optimal route for private message
+            let route = meshService.findOptimalRoute(
+                messageSize: messageSize,
+                destination: recipientPeerID,
+                preference: selectedRoutingPreference
+            )
+            return route?.costInRLT
+        } else {
+            // Get optimal route for broadcast message
+            let route = meshService.findOptimalRoute(
+                messageSize: messageSize,
+                preference: selectedRoutingPreference
+            )
+            return route?.costInRLT
+        }
+    }
+    
+    /// Update selected routing preference
+    /// - Parameter preference: New routing preference
+    func updateRoutingPreference(_ preference: RoutingPreference) {
+        selectedRoutingPreference = preference
+        updateRouteOptimization()  // Refresh recommendations
+    }
+    
+    // MARK: - Bridge Infrastructure
+    
+    /// Connect to a specific bridge node
+    func connectToBridge(_ bridgeNode: BridgeNode) {
+        bridgeService.connectToBridge(bridgeNode)
+    }
+    
+    /// Disconnect from current bridge
+    func disconnectFromBridge() {
+        bridgeService.disconnectFromCurrentBridge()
+    }
+    
+    /// Start hosting bridge service
+    func startHostingBridge() {
+        bridgeService.startHostingBridge()
+    }
+    
+    /// Stop hosting bridge service
+    func stopHostingBridge() {
+        bridgeService.stopHostingBridge()
+    }
+    
+    /// Check if device can act as a bridge
+    func canActAsBridge() -> Bool {
+        return bridgeService.canActAsBridge()
+    }
+    
+    /// Get bridge connectivity statistics
+    func getBridgeStatistics() -> BridgeStatistics {
+        let stats = bridgeService.getConnectivityStatistics()
+        return BridgeStatistics(
+            totalBridges: availableBridges.count,
+            activeBridges: availableBridges.filter { $0.quality > 0.5 }.count,
+            currentBridge: currentBridge?.id,
+            connectionSuccessRate: stats.successRate,
+            lastConnectionTime: stats.lastConnectionTime
+        )
+    }
+    
+    // MARK: - Anchoring Protocol
+    
+    /// Get DAG integrity status
+    func updateDAGIntegrityStatus() {
+        dagIntegrityStatus = anchoringService.verifyDAGIntegrity()
+    }
+    
+    /// Manually trigger anchoring
+    func performManualAnchoring() {
+        anchoringService.performAnchoring()
+    }
+    
+    /// Get anchoring statistics
+    func getAnchoringStatistics() -> AnchoringStatistics {
+        let recentAnchors = anchoringService.getRecentAnchors()
+        let confirmedAnchors = recentAnchors.filter { $0.status == .confirmed }
+        
+        return AnchoringStatistics(
+            totalAnchors: recentAnchors.count,
+            confirmedAnchors: confirmedAnchors.count,
+            lastAnchorTime: recentAnchors.first?.timestamp,
+            averageAnchoringTime: calculateAverageAnchoringTime(recentAnchors)
+        )
+    }
+    
+    private func calculateAverageAnchoringTime(_ anchors: [AnchoredRoot]) -> TimeInterval? {
+        let confirmedAnchors = anchors.filter { $0.status == .confirmed && $0.confirmationTime != nil }
+        guard !confirmedAnchors.isEmpty else { return nil }
+        
+        let totalTime = confirmedAnchors.reduce(0.0) { total, anchor in
+            guard let confirmationTime = anchor.confirmationTime else { return total }
+            return total + confirmationTime.timeIntervalSince(anchor.timestamp)
+        }
+        
+        return totalTime / Double(confirmedAnchors.count)
+    }
+    
+    // MARK: - File Transfer Delegate Methods
+    
+    func didReceiveFileTransferRequest(_ request: FileTransferRequest) {
+        DispatchQueue.main.async { [weak self] in
+            self?.pendingFileTransferRequest = request
+            self?.showFileTransferRequest = true
+        }
+    }
+    
+    func didReceiveFileTransferResponse(_ response: FileTransferResponse) {
+        // Already handled by FileTransferManager
+    }
+    
+    func didReceiveFileChunk(_ chunk: FileChunk) {
+        // Already handled by FileTransferManager
+    }
+    
+    func didReceiveFileChunkAck(_ ack: FileChunkAck) {
+        // Already handled by FileTransferManager
+    }
+    
+    func didReceiveFileTransferComplete(_ completion: FileTransferComplete) {
+        // Show system message about completed transfer
+        DispatchQueue.main.async { [weak self] in
+            let statusText = completion.success ? "completed successfully" : "failed"
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: "File transfer \(completion.transferID.prefix(8)) \(statusText)",
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+    
+    func didReceiveFileTransferCancel(_ cancellation: FileTransferCancel) {
+        // Show system message about cancelled transfer
+        DispatchQueue.main.async { [weak self] in
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: "File transfer \(cancellation.transferID.prefix(8)) cancelled: \(cancellation.reason)",
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+    
+    func didUpdateFileTransferStatus(_ transferID: String, status: FileTransferStatus) {
+        // Status updates are handled by the FileTransferManager's @Published properties
+        // The UI will automatically update through ObservableObject
+    }
+    
+}
+
+// MARK: - AnchoringServiceDelegate
+
+extension ChatViewModel: AnchoringServiceDelegate {
+    func anchoringService(_ service: AnchoringService, didCreateAnchor anchor: AnchoredRoot) {
+        DispatchQueue.main.async { [weak self] in
+            self?.anchoredRoots = service.getRecentAnchors()
+            self?.lastAnchoringTime = anchor.timestamp
+            self?.updateDAGIntegrityStatus()
+        }
+    }
+    
+    func anchoringService(_ service: AnchoringService, didUpdateAnchorStatus anchor: AnchoredRoot) {
+        DispatchQueue.main.async { [weak self] in
+            self?.anchoredRoots = service.getRecentAnchors()
+            self?.updateDAGIntegrityStatus()
+            
+            // Show system message for successful anchoring
+            if anchor.status == .confirmed {
+                let systemMessage = BitchatMessage(
+                    sender: "system",
+                    content: "dag merkle root anchored to external networks ✓",
+                    timestamp: Date(),
+                    isRelay: false
+                )
+                self?.messages.append(systemMessage)
+            }
+        }
+    }
+}
+
+// MARK: - Supporting Data Structures
+
+/// Anchoring statistics for UI display
+public struct AnchoringStatistics {
+    public let totalAnchors: Int
+    public let confirmedAnchors: Int
+    public let lastAnchorTime: Date?
+    public let averageAnchoringTime: TimeInterval?
+    
+    public var confirmationRate: Double {
+        guard totalAnchors > 0 else { return 0.0 }
+        return Double(confirmedAnchors) / Double(totalAnchors)
+    }
+}
+
+// MARK: - BridgeServiceDelegate
+
+extension ChatViewModel: BridgeServiceDelegate {
+    func bridgeService(_ service: BridgeService, didUpdateStatus status: BridgeStatus) {
+        DispatchQueue.main.async { [weak self] in
+            self?.bridgeStatus = status
+            self?.connectivityStats = service.getConnectivityStatistics()
+            
+            // Show system message for bridge status changes
+            let statusMessage: String
+            switch status {
+            case .offline:
+                statusMessage = "bridge offline - no internet connection"
+            case .hasInternet:
+                statusMessage = "internet connection available"
+            case .connectedToBridge:
+                statusMessage = "connected to bridge node"
+            case .hostingBridge:
+                statusMessage = "hosting bridge for other peers"
+            }
+            
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: statusMessage,
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+    
+    func bridgeService(_ service: BridgeService, didConnectToBridge bridge: BridgeNode) {
+        DispatchQueue.main.async { [weak self] in
+            self?.currentBridge = bridge
+            self?.availableBridges = service.availableBridges
+            
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: "connected to bridge \(bridge.id) - global network access enabled",
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+    
+    func bridgeService(_ service: BridgeService, didDisconnectFromBridge bridge: BridgeNode) {
+        DispatchQueue.main.async { [weak self] in
+            self?.currentBridge = nil
+            self?.availableBridges = service.availableBridges
+            
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: "disconnected from bridge \(bridge.id)",
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+    
+    func bridgeService(_ service: BridgeService, didStartHostingBridge bridge: BridgeNode) {
+        DispatchQueue.main.async { [weak self] in
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: "started hosting bridge \(bridge.id) - helping other peers connect",
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+    
+    func bridgeService(_ service: BridgeService, didStopHostingBridge bridge: BridgeNode?) {
+        DispatchQueue.main.async { [weak self] in
+            let systemMessage = BitchatMessage(
+                sender: "system",
+                content: "stopped hosting bridge service",
+                timestamp: Date(),
+                isRelay: false
+            )
+            self?.messages.append(systemMessage)
+        }
+    }
+}
+
+/// Bridge statistics for UI display
+public struct BridgeStatistics {
+    public let totalBridges: Int
+    public let activeBridges: Int
+    public let currentBridge: String?
+    public let connectionSuccessRate: Double
+    public let lastConnectionTime: Date?
+    
+    public var hasActiveBridges: Bool {
+        return activeBridges > 0
+    }
+    
+    public var isConnectedToBridge: Bool {
+        return currentBridge != nil
+    }
 }

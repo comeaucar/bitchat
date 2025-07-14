@@ -67,7 +67,7 @@ enum PowerMode {
     }
 }
 
-class BatteryOptimizer {
+class BatteryOptimizer: BatteryLevelProvider {
     static let shared = BatteryOptimizer()
     
     @Published var currentPowerMode: PowerMode = .balanced
@@ -225,5 +225,16 @@ class BatteryOptimizer {
     // Should we reduce message frequency?
     var shouldThrottleMessages: Bool {
         return currentPowerMode == .powerSaver || currentPowerMode == .ultraLowPower
+    }
+}
+
+// MARK: - BatteryLevelProvider Conformance
+extension BatteryOptimizer {
+    var batteryLevelDouble: Double {
+        return Double(batteryLevel)
+    }
+    
+    var batteryLevelPublisher: AnyPublisher<Double, Never> {
+        return $batteryLevel.map { Double($0) }.eraseToAnyPublisher()
     }
 }

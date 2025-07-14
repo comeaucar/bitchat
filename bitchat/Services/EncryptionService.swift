@@ -39,6 +39,9 @@ class EncryptionService {
         self.signingPrivateKey = Curve25519.Signing.PrivateKey()
         self.signingPublicKey = signingPrivateKey.publicKey
         
+        let signingKeyHash = signingPrivateKey.publicKey.rawRepresentation.prefix(8).hexEncodedString()
+        print("🔑 EncryptionService initialized with signing key: \(signingKeyHash)")
+        
         // Load or create persistent identity key
         if let identityData = UserDefaults.standard.data(forKey: "bitchat.identityKey"),
            let loadedKey = try? Curve25519.Signing.PrivateKey(rawRepresentation: identityData) {
@@ -58,6 +61,20 @@ class EncryptionService {
         data.append(signingPublicKey.rawRepresentation)  // 32 bytes - ephemeral signing key
         data.append(identityPublicKey.rawRepresentation)  // 32 bytes - persistent identity key
         return data  // Total: 96 bytes
+    }
+    
+    // Get signing private key for relay transactions
+    func getSigningPrivateKey() -> Curve25519.Signing.PrivateKey {
+        return signingPrivateKey
+    }
+    
+    // Get persistent identity key for wallet transactions (ensures single wallet per device)
+    func getIdentityPrivateKey() -> Curve25519.Signing.PrivateKey {
+        return identityKey
+    }
+    
+    func getIdentityPublicKey() -> Curve25519.Signing.PublicKey {
+        return identityPublicKey
     }
     
     // Add peer's combined public keys

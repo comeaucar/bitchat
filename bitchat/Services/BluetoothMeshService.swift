@@ -5,7 +5,6 @@
 // This is free and unencumbered software released into the public domain.
 // For more information, see <https://unlicense.org>
 //
-
 import Foundation
 import CoreBluetooth
 import Combine
@@ -17,15 +16,7 @@ import IOKit.ps
 import UIKit
 #endif
 
-// Extension for hex encoding
-extension Data {
-    func hexEncodedString() -> String {
-        if self.isEmpty {
-            return ""
-        }
-        return self.map { String(format: "%02x", $0) }.joined()
-    }
-}
+// CoreMesh classes are now compiled directly into the target
 
 class BluetoothMeshService: NSObject {
     static let serviceUUID = CBUUID(string: "F47B5E2D-4A9E-4C5A-9B3F-8E1D2C3A4B5C")
@@ -89,6 +80,29 @@ class BluetoothMeshService: NSObject {
     // Battery optimizer integration
     private let batteryOptimizer = BatteryOptimizer.shared
     private var batteryOptimizerCancellables = Set<AnyCancellable>()
+    
+    // Fee beacon manager for relay token system
+    private var feeBeaconManager: FeeBeaconManager?
+    
+    // Route optimizer for budgeted routing
+    private var routeOptimizer: RouteOptimizer?
+    
+    // Proof of Work service for spam protection
+    private let proofOfWork = ProofOfWork()
+    
+    // Transaction processor for relay rewards
+    private weak var transactionProcessor: TransactionProcessor?
+    
+    // Transaction processing is now handled by ChatViewModel
+    
+    // Track PoW results for reward calculation
+    private var lastPoWResult: ProofOfWorkResult?
+    private let powResultLock = NSLock()
+    
+    // Network metrics for PoW difficulty adjustment
+    private var networkMetricsTimer: Timer?
+    private var messagesReceivedCount: Int = 0
+    private var lastNetworkMetricsUpdate = Date()
     
     // Peer list update debouncing
     private var peerListUpdateTimer: Timer?
@@ -254,6 +268,10 @@ class BluetoothMeshService: NSObject {
         return encryptionService.getPeerIdentityKey(peerID)
     }
     
+    func getIdentityPublicKey() -> Curve25519.Signing.PublicKey {
+        return encryptionService.getIdentityPublicKey()
+    }
+    
     override init() {
         // Generate ephemeral peer ID for each session to prevent tracking
         // Use random bytes instead of UUID for better anonymity
@@ -378,8 +396,30 @@ class BluetoothMeshService: NSObject {
         // Setup battery optimizer
         setupBatteryOptimizer()
         
+        // Start network metrics tracking for PoW difficulty adjustment
+        scheduleNetworkMetricsUpdate()
+        
         // Start cover traffic for privacy
         startCoverTraffic()
+    }
+    
+    /// Initialize fee beacon manager with fee calculator from ChatViewModel
+    func setupFeeBeaconManager(feeCalculator: FeeCalculator) {
+        self.feeBeaconManager = FeeBeaconManager(feeCalculator: feeCalculator, batteryProvider: batteryOptimizer)
+        self.feeBeaconManager?.delegate = self
+        
+        // Initialize route optimizer with fee beacon manager
+        if let feeBeaconManager = self.feeBeaconManager {
+            self.routeOptimizer = RouteOptimizer(feeBeaconManager: feeBeaconManager)
+        }
+        
+        print("🏷️  Fee beacon manager initialized")
+    }
+    
+    /// Set transaction processor for relay rewards
+    func setTransactionProcessor(_ processor: TransactionProcessor) {
+        self.transactionProcessor = processor
+        print("🔗 Transaction processor connected for relay rewards")
     }
     
     func sendBroadcastAnnounce() {
@@ -417,13 +457,21 @@ class BluetoothMeshService: NSObject {
         // Use generic advertising to avoid identification
         // No identifying prefixes or app names for activist safety
         
-        // Only use allowed advertisement keys
-        advertisementData = [
+        // Build advertisement data with fee beacon information
+        var advertisementData: [String: Any] = [
             CBAdvertisementDataServiceUUIDsKey: [BluetoothMeshService.serviceUUID],
             // Use only peer ID without any identifying prefix
             CBAdvertisementDataLocalNameKey: myPeerID
         ]
         
+        // Add fee beacon data if available
+        if let feeBeaconManager = feeBeaconManager {
+            let feeBeaconData = feeBeaconManager.encodeFeeBeacon()
+            advertisementData[CBAdvertisementDataManufacturerDataKey] = feeBeaconData
+            print("🏷️  Advertising with fee beacon: \(feeBeaconManager.relayMinFee)µRLT")
+        }
+        
+        self.advertisementData = advertisementData
         isAdvertising = true
         peripheralManager?.startAdvertising(advertisementData)
     }
@@ -528,6 +576,22 @@ class BluetoothMeshService: NSObject {
                     signature = nil
                 }
                 
+                // Compute Proof of Work for spam protection if fee is too low
+                // Calculate actual fee based on message size and TTL
+                let baseFee: UInt32 = 1500 // µRLT base (matching cost analysis)
+                let sizeFee = UInt32(messageData.count) * 5 // ~5µRLT per byte for broadcast
+                let hopFee = UInt32(self.adaptiveTTL) * 100 // 100µRLT per hop
+                let congestionMultiplier: Double = 2.0 // Assume 2x congestion like cost analysis
+                let rawFee = baseFee + sizeFee + hopFee
+                let actualFee = UInt32(Double(rawFee) * congestionMultiplier)
+                print("💰 Broadcast message fee calculation: (\(baseFee) + \(sizeFee) + \(hopFee)) × \(congestionMultiplier) = \(actualFee)µRLT")
+                let powResult = self.computeProofOfWorkIfNeeded(messageData: messageData, messageFee: actualFee)
+                if powResult != nil {
+                    print("🔨 PoW computed for low-fee broadcast message")
+                }
+                
+                // Transaction already created in ChatViewModel - no need to duplicate
+                
                 // Use unified message type with broadcast recipient
                 let packet = BitchatPacket(
                     type: MessageType.message.rawValue,
@@ -561,7 +625,14 @@ class BluetoothMeshService: NSObject {
                     // Add random delay before initial send
                     let initialDelay = self.randomDelay()
                     DispatchQueue.main.asyncAfter(deadline: .now() + initialDelay) { [weak self] in
-                        self?.broadcastPacket(packet)
+                        guard let self = self else { return }
+                        
+                        // Use optimized routing for larger messages
+                        if messageData.count > 512 {
+                            self.sendPacketWithOptimizedRouting(packet, preference: .balanced)
+                        } else {
+                            self.broadcastPacket(packet)
+                        }
                     }
                     
                     // Single retry for reliability
@@ -625,6 +696,22 @@ class BluetoothMeshService: NSObject {
                     signature = nil
                 }
                 
+                // Compute Proof of Work for spam protection if fee is too low
+                // Calculate actual fee based on message size and TTL (matching cost analysis)
+                let baseFee: UInt32 = 1500 // µRLT base (matching cost analysis)
+                let sizeFee = UInt32(encryptedPayload.count) * 10 // ~10µRLT per byte for private messages
+                let hopFee = UInt32(self.adaptiveTTL) * 100 // 100µRLT per hop
+                let congestionMultiplier: Double = 2.0 // Assume 2x congestion like cost analysis
+                let rawFee = baseFee + sizeFee + hopFee
+                let actualFee = UInt32(Double(rawFee) * congestionMultiplier)
+                print("💰 Private message fee calculation: (\(baseFee) + \(sizeFee) + \(hopFee)) × \(congestionMultiplier) = \(actualFee)µRLT")
+                let powResult = self.computeProofOfWorkIfNeeded(messageData: encryptedPayload, messageFee: actualFee)
+                if powResult != nil {
+                    print("🔨 PoW computed for low-fee private message")
+                }
+                
+                // Transaction already created in ChatViewModel - no need to duplicate
+                
                 // Create packet with recipient ID for proper routing
                 let packet = BitchatPacket(
                     type: MessageType.message.rawValue,
@@ -677,8 +764,12 @@ class BluetoothMeshService: NSObject {
                     // Add random delay for timing obfuscation
                     let delay = self.randomDelay()
                     DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                        self?.broadcastPacket(packet)
-                        // Private message sent with timing delay
+                        guard let self = self else { return }
+                        
+                        // Use optimized routing for private messages
+                        // Private messages benefit from route optimization to minimize cost
+                        self.sendPacketWithOptimizedRouting(packet, preference: RoutingPreference.cheapest, destination: recipientPeerID)
+                        // Private message sent with timing delay and route optimization
                     }
                     
                     // Don't call didReceiveMessage here - let the view model handle it directly
@@ -946,6 +1037,120 @@ class BluetoothMeshService: NSObject {
         }
         
         return rssiWithDefaults
+    }
+    
+    // MARK: - File Transfer Methods
+    
+    func sendFileTransferRequest(_ request: FileTransferRequest, to recipientID: String) async throws {
+        guard let payloadData = request.encode() else {
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileTransferRequest.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 5  // Medium TTL for request
+        )
+        
+        broadcastPacket(packet)
+    }
+    
+    func sendFileTransferResponse(_ response: FileTransferResponse, to recipientID: String) async throws {
+        guard let payloadData = response.encode() else {
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileTransferResponse.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 5
+        )
+        
+        broadcastPacket(packet)
+    }
+    
+    func sendFileChunk(_ chunk: FileChunk, to recipientID: String) async throws {
+        guard let payloadData = chunk.encode() else {
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileChunk.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 3  // Lower TTL for chunks to reduce network congestion
+        )
+        
+        broadcastPacket(packet)
+    }
+    
+    func sendFileChunkAck(_ ack: FileChunkAck, to recipientID: String) async throws {
+        guard let payloadData = ack.encode() else {
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileChunkAck.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 3
+        )
+        
+        broadcastPacket(packet)
+    }
+    
+    func sendFileTransferComplete(_ completion: FileTransferComplete, to recipientID: String) async throws {
+        guard let payloadData = completion.encode() else {
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileTransferComplete.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 5
+        )
+        
+        broadcastPacket(packet)
+    }
+    
+    func sendFileTransferCancel(_ cancellation: FileTransferCancel, to recipientID: String) async throws {
+        guard let payloadData = cancellation.encode() else {
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileTransferCancel.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 5
+        )
+        
+        broadcastPacket(packet)
+    }
+    
+    func getPeerID() async -> String {
+        return myPeerID
     }
     
     // Emergency disconnect for panic situations
@@ -1512,6 +1717,9 @@ class BluetoothMeshService: NSObject {
                         }
                         
                         DispatchQueue.main.async {
+                            // Track message for network metrics
+                            self.trackMessageReceived()
+                            
                             self.delegate?.didReceiveMessage(messageWithPeerID)
                         }
                         
@@ -1546,6 +1754,13 @@ class BluetoothMeshService: NSObject {
                                          Double.random(in: 0...1) < relayProb
                         
                         if shouldRelay {
+                            // Only award relay rewards if we have other peers to actually relay to
+                            // In a 2-device network, receiving a message shouldn't earn a relay reward
+                            if self.activePeers.count > 1 {
+                                // Award relay reward to this node for forwarding the message
+                                self.awardRelayReward(for: packet, relayNodePeerID: self.myPeerID)
+                            }
+                            
                             // Add random delay to prevent collision storms
                             let delay = Double.random(in: minMessageDelay...maxMessageDelay)
                             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -1633,6 +1848,9 @@ class BluetoothMeshService: NSObject {
                         }
                         
                         DispatchQueue.main.async {
+                            // Track message for network metrics
+                            self.trackMessageReceived()
+                            
                             self.delegate?.didReceiveMessage(messageWithPeerID)
                         }
                         
@@ -1673,6 +1891,13 @@ class BluetoothMeshService: NSObject {
                                      Double.random(in: 0...1) < relayProb
                     
                     if shouldRelay {
+                        // Only award relay rewards if we have other peers to actually relay to
+                        // In a 2-device network, receiving a message shouldn't earn a relay reward
+                        if self.activePeers.count > 1 {
+                            // Award relay reward to this node for forwarding the private message
+                            self.awardRelayReward(for: packet, relayNodePeerID: self.myPeerID)
+                        }
+                        
                         // Add random delay to prevent collision storms
                         let delay = Double.random(in: minMessageDelay...maxMessageDelay)
                         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
@@ -2072,6 +2297,62 @@ class BluetoothMeshService: NSObject {
                 self.broadcastPacket(relayPacket)
             }
             
+        case .fileTransferRequest:
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let request = FileTransferRequest.decode(from: packet.payload) {
+                print("📥 Received file transfer request from \(senderID): \(request.fileName)")
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileTransferRequest(request, from: senderID)
+                }
+            }
+            
+        case .fileTransferResponse:
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let response = FileTransferResponse.decode(from: packet.payload) {
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileTransferResponse(response, from: senderID)
+                }
+            }
+            
+        case .fileChunk:
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let chunk = FileChunk.decode(from: packet.payload) {
+                print("📥 Received file chunk \(chunk.chunkIndex) from \(senderID) for transfer \(chunk.transferID.prefix(8))")
+                print("📥 Chunk size: \(chunk.chunkData.count) bytes, isLast: \(chunk.isLastChunk)")
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileChunk(chunk, from: senderID)
+                }
+            } else {
+                print("❌ Failed to decode file chunk from \(packet.payload.count) bytes")
+            }
+            
+        case .fileChunkAck:
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let ack = FileChunkAck.decode(from: packet.payload) {
+                print("📥 Received file chunk ACK \(ack.chunkIndex) from \(senderID) for transfer \(ack.transferID.prefix(8)) - success: \(ack.received)")
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileChunkAck(ack, from: senderID)
+                }
+            } else {
+                print("❌ Failed to decode file chunk ACK from \(packet.payload.count) bytes")
+            }
+            
+        case .fileTransferComplete:
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let completion = FileTransferComplete.decode(from: packet.payload) {
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileTransferComplete(completion, from: senderID)
+                }
+            }
+            
+        case .fileTransferCancel:
+            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let cancellation = FileTransferCancel.decode(from: packet.payload) {
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileTransferCancel(cancellation, from: senderID)
+                }
+            }
+            
         default:
             break
         }
@@ -2293,6 +2574,14 @@ extension BluetoothMeshService: CBCentralManagerDelegate {
             // Assume 8-character names are peer IDs
             let peerID = name
             peerRSSI[peerID] = RSSI
+            
+            // Extract fee beacon data if present
+            if let manufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
+               let feeBeacon = FeeBeaconManager.decodeFeeBeacon(from: manufacturerData, peerID: peerID, rssi: rssiValue) {
+                // Record fee beacon
+                feeBeaconManager?.recordFeeBeacon(from: peerID, minFee: feeBeacon.minFee, rssi: rssiValue)
+            }
+            
             // Discovered potential peer
         }
         
@@ -2526,10 +2815,35 @@ extension BluetoothMeshService: CBPeripheralDelegate {
             }
         }
     }
+
+    private static func extractMessageUUID(from packet: Data) -> UUID? {
+    // If your existing binary protocol already encodes a UUID, parse it properly here.
+    // Temporary fallback: hash the packet (not ideal for prod).
+    if packet.count >= 16 {
+        return UUID(uuidString: SHA256hexPrefix(of: packet))
+    }
+    return nil
+}
+
+private static func SHA256hexPrefix(of data: Data) -> String {
+    let digest = SHA256.hash(data: data)
+    // take first 16 hex chars → 8-4-4 template for a valid UUID
+    let hex = digest.map { String(format: "%02x", $0) }.joined()
+    let form = "\(hex.prefix(8))-\(hex.dropFirst(8).prefix(4))-\(hex.dropFirst(12).prefix(4))-\(hex.dropFirst(16).prefix(4))-\(hex.dropFirst(20).prefix(12))"
+    return form
+}
+
     
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         guard let data = characteristic.value else {
             return
+        }
+
+        // ─── HopLogger --------------------------------------------------------
+        if let uuid = Self.extractMessageUUID(from: data) {
+            HopLogger.shared.recordHop(messageID: uuid)
+            let hops = HopLogger.shared.hopCount(for: uuid) ?? 0   // correct API
+            print("🪄 HopLogger \(uuid) → hop \(hops)")
         }
         
         guard let packet = BitchatPacket.from(data) else { 
@@ -2857,6 +3171,212 @@ extension BluetoothMeshService: CBPeripheralManagerDelegate {
         return TimeInterval.random(in: minMessageDelay...maxMessageDelay)
     }
     
+    // MARK: - Fee Beacon Methods
+    
+    /// Get fee beacon for a specific peer
+    func getFeeBeacon(for peerID: String) -> FeeBeacon? {
+        return feeBeaconManager?.getFeeBeacon(for: peerID)
+    }
+    
+    /// Get all current fee beacons
+    func getAllFeeBeacons() -> [FeeBeacon] {
+        return feeBeaconManager?.getAllFeeBeacons() ?? []
+    }
+    
+    /// Calculate route cost based on fee beacons
+    func calculateRouteCost(for route: [String], messageSize: Int) -> RouteCostEstimate? {
+        return feeBeaconManager?.calculateRouteCost(for: route, messageSize: messageSize)
+    }
+    
+    /// Get network fee statistics
+    func getNetworkFeeStats() -> NetworkFeeStats? {
+        return feeBeaconManager?.getNetworkFeeStats()
+    }
+    
+    // MARK: - Route Optimization
+    
+    /// Find optimal route for a message based on user preferences
+    /// - Parameters:
+    ///   - messageSize: Size of the message in bytes
+    ///   - destination: Target destination for private messages
+    ///   - preference: User's routing preference (cost vs speed)
+    /// - Returns: Optimized route or nil if no suitable route found
+    func findOptimalRoute(
+        messageSize: Int,
+        destination: String? = nil,
+        preference: RoutingPreference = .balanced
+    ) -> OptimizedRoute? {
+        guard let routeOptimizer = routeOptimizer else { return nil }
+        
+        // Get list of available peers
+        let availablePeers = getAllConnectedPeerIDs()
+        guard !availablePeers.isEmpty else { return nil }
+        
+        return routeOptimizer.findOptimalRoute(
+            availablePeers: availablePeers,
+            destination: destination,
+            messageSize: messageSize,
+            preference: preference
+        )
+    }
+    
+    /// Get route recommendations for different preferences
+    /// - Parameter messageSize: Size of the message in bytes
+    /// - Returns: Dictionary of route recommendations by preference
+    func getRouteRecommendations(messageSize: Int) -> [RoutingPreference: OptimizedRoute] {
+        guard let routeOptimizer = routeOptimizer else { return [:] }
+        
+        let availablePeers = getAllConnectedPeerIDs()
+        guard !availablePeers.isEmpty else { return [:] }
+        
+        return routeOptimizer.getRouteRecommendations(
+            availablePeers: availablePeers,
+            messageSize: messageSize
+        )
+    }
+    
+    /// Check if route optimization is available
+    /// - Returns: True if route optimizer is initialized and peers are available
+    func isRouteOptimizationAvailable() -> Bool {
+        return routeOptimizer != nil && !getAllConnectedPeerIDs().isEmpty
+    }
+    
+    /// Send message with custom routing preference
+    /// - Parameters:
+    ///   - content: Message content
+    ///   - mentions: Mentioned users
+    ///   - channel: Channel name
+    ///   - to: Recipient ID for private messages
+    ///   - preference: Routing preference (cheapest, fastest, balanced, reliable)
+    ///   - messageID: Optional message ID
+    ///   - timestamp: Optional timestamp
+    func sendMessageWithRouting(
+        _ content: String,
+        mentions: [String] = [],
+        channel: String? = nil,
+        to recipientID: String? = nil,
+        preference: RoutingPreference = .balanced,
+        messageID: String? = nil,
+        timestamp: Date? = nil
+    ) {
+        guard !content.isEmpty else { return }
+        
+        if let recipientID = recipientID {
+            // Private message with custom routing
+            sendPrivateMessage(content, to: recipientID, recipientNickname: "user", messageID: messageID)
+        } else {
+            // Broadcast message - modify the internal logic to use the preference
+            // For now, we'll just call the regular sendMessage which will use optimized routing
+            sendMessage(content, mentions: mentions, channel: channel, to: recipientID, messageID: messageID, timestamp: timestamp)
+        }
+    }
+    
+    /// Send packet using optimized routing
+    /// - Parameters:
+    ///   - packet: The packet to send
+    ///   - preference: Routing preference for route selection
+    ///   - destination: Destination peer ID for private messages
+    private func sendPacketWithOptimizedRouting(
+        _ packet: BitchatPacket,
+        preference: RoutingPreference = .balanced,
+        destination: String? = nil
+    ) {
+        // Calculate message size
+        let messageSize = packet.payload.count
+        
+        // Get optimal route
+        if let route = findOptimalRoute(
+            messageSize: messageSize,
+            destination: destination,
+            preference: preference
+        ) {
+            // Send to specific route if available
+            sendToOptimizedRoute(packet, route: route.route)
+            
+            print("📍 Using optimized route: \(route.route.count) hops, \(String(format: "%.6f", route.costInRLT)) RLT")
+        } else {
+            // Fallback to broadcast if no optimal route found
+            broadcastPacket(packet)
+            print("📍 Fallback to broadcast routing")
+        }
+    }
+    
+    /// Send packet to a specific optimized route
+    /// - Parameters:
+    ///   - packet: The packet to send
+    ///   - route: Array of peer IDs representing the route
+    private func sendToOptimizedRoute(_ packet: BitchatPacket, route: [String]) {
+        guard let data = packet.toBinaryData() else { return }
+        
+        // For now, send to the first few peers in the route
+        // In a full implementation, this would use proper multi-hop routing
+        let targetPeers = Array(route.prefix(3))  // Send to first 3 peers in route
+        
+        var sentToPeers = 0
+        for peerID in targetPeers {
+            if let peripheral = connectedPeripherals[peerID],
+               peripheral.state == .connected,
+               let characteristic = peripheralCharacteristics[peripheral] {
+                
+                let writeType: CBCharacteristicWriteType = data.count > 512 ? .withResponse : .withoutResponse
+                peripheral.writeValue(data, for: characteristic, type: writeType)
+                sentToPeers += 1
+            }
+        }
+        
+        // If we couldn't send to any peers in the route, fallback to broadcast
+        if sentToPeers == 0 {
+            broadcastPacket(packet)
+        }
+    }
+    
+    /// Award relay reward for forwarding a message
+    /// - Parameters:
+    ///   - packet: The packet being relayed
+    ///   - relayNodePeerID: The peer ID of the node doing the relaying
+    private func awardRelayReward(for packet: BitchatPacket, relayNodePeerID: String) {
+        // Only award rewards for message packets
+        guard packet.type == MessageType.message.rawValue else { return }
+        
+        // Don't award rewards for our own messages
+        guard let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+              senderID != myPeerID else { return }
+        
+        // Don't award rewards to the original sender
+        guard relayNodePeerID != senderID else { return }
+        
+        // Get the relay node's public key
+        guard let relayNodePubKey = encryptionService.getPeerIdentityKey(relayNodePeerID) else {
+            print("❌ Cannot award relay reward: no public key for \(relayNodePeerID)")
+            return
+        }
+        
+        // Convert Data to CryptoCurve25519.Signing.PublicKey
+        guard let relayNodeSigningKey = try? CryptoCurve25519.Signing.PublicKey(rawRepresentation: relayNodePubKey) else {
+            print("❌ Cannot award relay reward: invalid public key format for \(relayNodePeerID)")
+            return
+        }
+        
+        // Extract fee from packet (if available from fee beacon)
+        var feePerHop: UInt32 = 100  // Default fee if not available
+        if let feeBeacon = feeBeaconManager?.getFeeBeacon(for: relayNodePeerID) {
+            feePerHop = feeBeacon.minFee
+        }
+        
+        // Create a dummy transaction ID for the relay reward
+        // In a full implementation, this would be extracted from the packet
+        let rewardTransactionId = SHA256Digest(data: Data("\(packet.timestamp)-\(relayNodePeerID)".utf8))
+        
+        // Award the relay reward
+        transactionProcessor?.awardImmediateRelayReward(
+            to: relayNodeSigningKey,
+            feePerHop: feePerHop,
+            transactionId: rewardTransactionId
+        )
+        
+        print("🏆 Awarded relay reward: \(feePerHop)µRLT to \(relayNodePeerID.prefix(8))")
+    }
+    
     // MARK: - Cover Traffic
     
     private func startCoverTraffic() {
@@ -2929,5 +3449,193 @@ extension BluetoothMeshService: CBPeripheralManagerDelegate {
     
     private func updatePeerLastSeen(_ peerID: String) {
         peerLastSeenTimestamps[peerID] = Date()
+    }
+}
+
+// MARK: - FeeBeaconManagerDelegate
+
+extension BluetoothMeshService: FeeBeaconManagerDelegate {
+    func feeBeaconManager(_ manager: FeeBeaconManager, didUpdateMinFee newFee: UInt32) {
+        print("🏷️  Updated minimum relay fee to \(newFee)µRLT")
+        
+        // Update advertisement data with new fee
+        if isAdvertising {
+            peripheralManager?.stopAdvertising()
+            startAdvertising()
+        }
+    }
+    
+    func feeBeaconManager(_ manager: FeeBeaconManager, didReceiveFeeBeacon beacon: FeeBeacon) {
+        print("📡 Received fee beacon from \(beacon.peerID): \(beacon.minFee)µRLT")
+        
+        // Notify delegate about fee beacon updates
+        DispatchQueue.main.async { [weak self] in
+            self?.delegate?.didUpdateNetworkFees()
+        }
+    }
+}
+
+// MARK: - Proof of Work Extension
+
+extension BluetoothMeshService {
+    
+    /// Compute Proof of Work for low-fee messages
+    /// - Parameters:
+    ///   - messageData: The message payload data
+    ///   - messageFee: Fee being paid for the message (µRLT)
+    /// - Returns: ProofOfWorkResult if PoW is required, nil otherwise
+    private func computeProofOfWorkIfNeeded(messageData: Data, messageFee: UInt32) -> ProofOfWorkResult? {
+        // Get current network minimum fee
+        guard let feeBeaconManager = feeBeaconManager else { return nil }
+        let relayMinFee = feeBeaconManager.relayMinFee
+        
+        // Check if PoW is required
+        guard proofOfWork.requiresProofOfWork(messageFee: messageFee, relayMinFee: relayMinFee) else {
+            print("💰 Message fee (\(messageFee)µRLT) >= relay min fee (\(relayMinFee)µRLT), no PoW required")
+            return nil
+        }
+        
+        print("🔨 Message fee (\(messageFee)µRLT) < relay min fee (\(relayMinFee)µRLT), computing PoW...")
+        
+        // Get sender signing public key
+        let senderPubKey = encryptionService.signingPublicKey
+        
+        // Compute PoW
+        let timestamp = UInt64(Date().timeIntervalSince1970 * 1000) // milliseconds
+        let powResult = proofOfWork.computeProofOfWork(
+            messageData: messageData,
+            senderPubKey: senderPubKey,
+            timestamp: timestamp
+        )
+        
+        print("✅ PoW computed: nonce \(powResult.nonce), difficulty \(powResult.difficulty)")
+        
+        // Store PoW result for reward calculation
+        powResultLock.lock()
+        lastPoWResult = powResult
+        powResultLock.unlock()
+        
+        return powResult
+    }
+    
+    /// Verify Proof of Work for received messages
+    /// - Parameters:
+    ///   - messageData: The message payload data
+    ///   - senderPubKey: Sender's public key
+    ///   - timestamp: Message timestamp
+    ///   - powResult: PoW result to verify
+    /// - Returns: True if PoW is valid or not required
+    private func verifyProofOfWorkIfNeeded(
+        messageData: Data,
+        senderPubKey: CryptoCurve25519.Signing.PublicKey,
+        timestamp: UInt64,
+        powResult: ProofOfWorkResult?
+    ) -> Bool {
+        // If no PoW provided, that's fine (high-fee message)
+        guard let powResult = powResult else { return true }
+        
+        // Verify the PoW
+        let isValid = proofOfWork.verifyProofOfWork(
+            messageData: messageData,
+            senderPubKey: senderPubKey,
+            timestamp: timestamp,
+            powResult: powResult
+        )
+        
+        if isValid {
+            print("✅ PoW verification passed")
+        } else {
+            print("❌ PoW verification failed - message rejected")
+        }
+        
+        return isValid
+    }
+    
+    /// Create enhanced packet with PoW support
+    /// - Parameters:
+    ///   - messageData: The message payload
+    ///   - messageFee: Fee being paid (µRLT)
+    ///   - type: Message type
+    ///   - senderID: Sender identifier
+    ///   - recipientID: Recipient identifier (optional)
+    ///   - signature: Message signature (optional)
+    ///   - ttl: Time to live for packet
+    /// - Returns: BitchatPacket with PoW if required
+    private func createPacketWithPoW(
+        messageData: Data,
+        messageFee: UInt32,
+        type: UInt8,
+        senderID: Data,
+        recipientID: Data?,
+        signature: Data?,
+        ttl: UInt8
+    ) -> BitchatPacket {
+        // Compute PoW if needed
+        let powResult = computeProofOfWorkIfNeeded(messageData: messageData, messageFee: messageFee)
+        
+        // Create basic packet (for now, until we fully migrate to CryptoPacket)
+        return BitchatPacket(
+            type: type,
+            senderID: senderID,
+            recipientID: recipientID,
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: messageData,
+            signature: signature,
+            ttl: ttl
+        )
+        
+        // TODO: Integrate PoW into packet structure
+        // This will require updating BitchatPacket to include PoW fields
+        // or creating a new enhanced packet format
+    }
+    
+    // Transaction creation is now handled by ChatViewModel to avoid duplication
+    
+    /// Get the last PoW result for reward calculation
+    public func getLastPoWResult() -> ProofOfWorkResult? {
+        powResultLock.lock()
+        let result = lastPoWResult
+        lastPoWResult = nil // Clear after use to avoid double rewards
+        powResultLock.unlock()
+        return result
+    }
+    
+    /// Schedule network metrics updates for PoW difficulty adjustment
+    private func scheduleNetworkMetricsUpdate() {
+        networkMetricsTimer?.invalidate()
+        networkMetricsTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+            self?.updateNetworkMetrics()
+        }
+    }
+    
+    /// Update network metrics for PoW difficulty adjustment
+    private func updateNetworkMetrics() {
+        let currentTime = Date()
+        let timeSinceLastUpdate = currentTime.timeIntervalSince(lastNetworkMetricsUpdate)
+        
+        // Calculate messages per second
+        let messagesPerSecond = Double(messagesReceivedCount) / timeSinceLastUpdate
+        
+        // Get current network size
+        let activeNodes = max(1, activePeers.count + 1) // +1 for self
+        
+        // Estimate token value based on network activity (simplified)
+        let tokenValue = max(100.0, 100.0 + (messagesPerSecond * 10.0))
+        
+        // Update PoW difficulty based on network conditions
+        proofOfWork.updateNetworkMetrics(
+            activeNodes: activeNodes,
+            messagesPerSecond: messagesPerSecond,
+            tokenValue: tokenValue
+        )
+        
+        // Reset counters
+        messagesReceivedCount = 0
+        lastNetworkMetricsUpdate = currentTime
+    }
+    
+    /// Track message received for network metrics
+    private func trackMessageReceived() {
+        messagesReceivedCount += 1
     }
 }
