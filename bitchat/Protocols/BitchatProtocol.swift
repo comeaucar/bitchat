@@ -597,7 +597,7 @@ struct FileChunk: Codable {
         offset += 2
         
         // Validate data length is reasonable
-        guard dataLength <= 1024 else { return nil }  // Max 1KB chunk
+        guard dataLength <= 2048 else { return nil }  // Max 2KB chunk
         
         // Chunk data - safe bounds checking
         guard offset + Int(dataLength) + 4 + 1 <= safeData.count else { return nil }

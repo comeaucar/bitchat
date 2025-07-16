@@ -22,7 +22,7 @@ class FileTransferManager: ObservableObject {
     
     private weak var meshService: BluetoothMeshService?
     private let fileQueue = DispatchQueue(label: "file.transfer.queue", qos: .userInitiated)
-    private let chunkSize: UInt32 = 150    // 150 byte chunks to stay within BLE MTU limits after binary encoding
+    private let chunkSize: UInt32 = 400    // 400 byte chunks - use more of the BLE MTU for better throughput
     private let maxConcurrentTransfers = 3
     
     // Per-MB pricing (in µRLT)
@@ -337,12 +337,12 @@ class FileTransferManager: ObservableObject {
             // Wait for retransmissions - sender now has up to 5 attempts with exponential backoff
             // Need to wait longer for all retransmission attempts
             Task {
-                print("📊 [RECIPIENT] Waiting for retransmissions... (up to 3 minutes)")
+                print("📊 [RECIPIENT] Waiting for retransmissions... (up to 2 minutes)")
                 
-                // Check progress every 10 seconds during wait period
-                for waitTime in stride(from: 10, through: 180, by: 10) {  // Wait up to 3 minutes
+                // Check progress every 5 seconds during wait period
+                for waitTime in stride(from: 5, through: 120, by: 5) {  // Wait up to 2 minutes
                     do {
-                        try await Task.sleep(nanoseconds: 10_000_000_000) // Wait 10 seconds
+                        try await Task.sleep(nanoseconds: 5_000_000_000) // Wait 5 seconds
                     } catch {
                         print("⚠️ [RECIPIENT] Sleep interrupted: \(error)")
                         break
@@ -379,7 +379,7 @@ class FileTransferManager: ObservableObject {
                         
                         // Check if we have enough chunks to complete (95% threshold)
                         let successRate = Double(receivedCount) / Double(totalChunks)
-                        if successRate >= 0.95 && waitTime >= 60 {  // After 1 minute, accept 95% success
+                        if successRate >= 0.95 && waitTime >= 30 {  // After 30 seconds, accept 95% success
                             print("✅ [RECIPIENT] High success rate (\(Int(successRate * 100))%) reached, completing transfer")
                             if let transfer = self.activeTransfers[transferID] {
                                 await self.completeFileTransfer(transferID: transferID, from: transfer.senderID)
@@ -558,37 +558,53 @@ class FileTransferManager: ObservableObject {
         
         await updateTransferStatus(transferID, status: .transferring(chunksComplete: 0, totalChunks: totalChunks))
         
+        // Sliding window approach for better throughput
+        let windowSize = min(10, Int(totalChunks))  // Send up to 10 chunks at once
         var sentChunks: UInt32 = 0
         
-        for chunkIndex in 0..<totalChunks {
-            let startOffset = Int(chunkIndex * chunkSize)
-            let endOffset = min(startOffset + Int(chunkSize), fileData.count)
-            let chunkData = fileData.subdata(in: startOffset..<endOffset)
-            let isLastChunk = chunkIndex == totalChunks - 1
+        for windowStart in stride(from: 0, to: Int(totalChunks), by: windowSize) {
+            let windowEnd = min(windowStart + windowSize, Int(totalChunks))
             
-            let chunk = FileChunk(
-                transferID: transferID,
-                chunkIndex: chunkIndex,
-                chunkData: chunkData,
-                isLastChunk: isLastChunk
-            )
+            print("📤 [WINDOW] Sending chunk window \(windowStart) to \(windowEnd-1)")
             
-            do {
-                print("📤 [SENDER] Sending chunk \(chunkIndex) (chunk \(chunkIndex + 1)/\(totalChunks)) to recipient \(transfer.recipientID.prefix(8))")
-                try await meshService.sendFileChunk(chunk, to: transfer.recipientID)
-                sentChunks += 1
-                print("📤 Sent chunk \(chunkIndex) (\(chunkData.count) bytes) for transfer \(transferID.prefix(8))")
+            // Send all chunks in this window
+            for chunkIndex in windowStart..<windowEnd {
+                let startOffset = Int(UInt32(chunkIndex) * chunkSize)
+                let endOffset = min(startOffset + Int(chunkSize), fileData.count)
+                let chunkData = fileData.subdata(in: startOffset..<endOffset)
+                let isLastChunk = chunkIndex == Int(totalChunks) - 1
                 
-                // Note: Progress is updated only based on ACKs received, not chunks sent
-                // This prevents the progress bar from jumping between send progress and ACK progress
+                let chunk = FileChunk(
+                    transferID: transferID,
+                    chunkIndex: UInt32(chunkIndex),
+                    chunkData: chunkData,
+                    isLastChunk: isLastChunk
+                )
                 
-                // Add delay between chunks to avoid overwhelming the mesh
-                try await Task.sleep(nanoseconds: 200_000_000)   // 0.2 second delay (tiny for 200 byte chunks)
-            } catch {
-                print("❌ Failed to send chunk \(chunkIndex): \(error)")
-                await updateTransferStatus(transferID, status: .failed(error: "Failed to send chunk \(chunkIndex)"))
-                await cleanupTransfer(transferID)
-                return
+                do {
+                    print("📤 [SENDER] Sending chunk \(chunkIndex) (chunk \(chunkIndex + 1)/\(totalChunks)) to recipient \(transfer.recipientID.prefix(8))")
+                    try await meshService.sendFileChunk(chunk, to: transfer.recipientID)
+                    sentChunks += 1
+                    print("📤 Sent chunk \(chunkIndex) (\(chunkData.count) bytes) for transfer \(transferID.prefix(8))")
+                    
+                    // Small delay between chunks in the same window
+                    try await Task.sleep(nanoseconds: 10_000_000)   // 0.01 second delay (10ms within window)
+                } catch {
+                    print("❌ Failed to send chunk \(chunkIndex): \(error)")
+                    await updateTransferStatus(transferID, status: .failed(error: "Failed to send chunk \(chunkIndex)"))
+                    await cleanupTransfer(transferID)
+                    return
+                }
+            }
+            
+            // Wait a bit longer between windows to let ACKs come back
+            if windowEnd < Int(totalChunks) {
+                do {
+                    try await Task.sleep(nanoseconds: 100_000_000)   // 0.1 second delay between windows
+                } catch {
+                    print("⚠️ [SENDER] Initial sleep interrupted between windows: \(error)")
+                    return
+                }
             }
         }
         
@@ -598,7 +614,7 @@ class FileTransferManager: ObservableObject {
         // Check for missing ACKs and retransmit if needed (multiple attempts)
         Task {
             do {
-                try await Task.sleep(nanoseconds: 10_000_000_000)  // Wait 10 seconds for ACKs
+                try await Task.sleep(nanoseconds: 5_000_000_000)  // Wait 5 seconds for ACKs (reduced from 10s)
             } catch {
                 print("⚠️ [SENDER] Initial sleep interrupted: \(error)")
                 return
@@ -616,7 +632,7 @@ class FileTransferManager: ObservableObject {
                         await retransmitMissingChunks(transferID: transferID, transfer: currentTransfer, attempt: attempt)
                         
                         // Wait between attempts with exponential backoff
-                        let backoffDelay = min(15_000_000_000 * UInt64(attempt), 60_000_000_000)  // Max 60 seconds
+                        let backoffDelay = min(5_000_000_000 * UInt64(attempt), 30_000_000_000)  // Max 30 seconds
                         do {
                             try await Task.sleep(nanoseconds: backoffDelay)
                         } catch {
@@ -638,7 +654,7 @@ class FileTransferManager: ObservableObject {
         // This prevents the transfer from hanging indefinitely
         Task {
             do {
-                try await Task.sleep(nanoseconds: 240_000_000_000)  // 4 minute timeout (matches recipient wait time)
+                try await Task.sleep(nanoseconds: 150_000_000_000)  // 2.5 minute timeout (matches recipient wait time)
             } catch {
                 print("⚠️ [SENDER] Timeout sleep interrupted: \(error)")
                 return
