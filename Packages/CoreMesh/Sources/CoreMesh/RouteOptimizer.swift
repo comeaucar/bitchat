@@ -48,7 +48,7 @@ public final class RouteOptimizer {
         )
         
         if let cachedRoute = getCachedRoute(key: cacheKey) {
-            print("📍 Using cached route: \(cachedRoute.route.count) hops, \(cachedRoute.cost)µRLT")
+            //print("📍 Using cached route: \(cachedRoute.route.count) hops, \(cachedRoute.cost)µRLT")
             return OptimizedRoute(
                 route: cachedRoute.route,
                 totalCost: cachedRoute.cost,
@@ -103,7 +103,7 @@ public final class RouteOptimizer {
             alternativeRoutes: Array(alternatives)
         )
         
-        print("📍 Selected route: \(bestRoute.route.count) hops, \(bestRoute.totalCost)µRLT, \(String(format: "%.2f", bestRoute.estimatedDeliveryTime))s")
+        //print("📍 Selected route: \(bestRoute.route.count) hops, \(bestRoute.totalCost)µRLT, \(String(format: "%.2f", bestRoute.estimatedDeliveryTime))s")
         
         return optimizedRoute
     }

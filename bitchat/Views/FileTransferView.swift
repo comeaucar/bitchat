@@ -39,124 +39,151 @@ struct FileTransferView: View {
     @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
+        #if os(macOS)
+        VStack(spacing: 0) {
+            // Custom header for macOS
+            HStack {
+                Text("File Transfer")
+                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                    .foregroundColor(.primary)
+                Spacer()
+                Button("Cancel") {
+                    presentationMode.wrappedValue.dismiss()
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.primary)
+                .padding()
+            }
+            .background(Color(NSColor.controlBackgroundColor).opacity(0.95))
+            
+            fileTransferContent
+        }
+        .frame(width: 600, height: 700)
+        #else
         NavigationView {
-            VStack(spacing: 20) {
-                // Header
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("File Transfer")
-                        .font(.largeTitle)
-                        .fontWeight(.bold)
-                    
-                    Text("Send files securely over the mesh network")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                    
-                    // Cost info
-                    HStack {
-                        Image(systemName: "dollarsign.circle")
-                            .foregroundColor(.green)
-                        Text("50,000µRLT per MB")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        Spacer()
-                        Text("Max: 100 MB")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
+            fileTransferContent
+                .navigationTitle("File Transfer")
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Cancel") {
+                            presentationMode.wrappedValue.dismiss()
+                        }
                     }
-                    .padding(.horizontal)
-                    .padding(.vertical, 8)
-                    .background(Color.secondary.opacity(0.1))
-                    .cornerRadius(8)
+                }
+        }
+        #endif
+    }
+    
+    private var fileTransferContent: some View {
+        VStack(spacing: 20) {
+            // Header
+            VStack(alignment: .leading, spacing: 8) {
+                #if os(iOS)
+                Text("File Transfer")
+                    .font(.largeTitle)
+                    .fontWeight(.bold)
+                #endif
+                
+                Text("Send files securely over the mesh network")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+                
+                // Cost info
+                HStack {
+                    Image(systemName: "dollarsign.circle")
+                        .foregroundColor(.green)
+                    Text("50,000µRLT per MB")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                    Spacer()
+                    Text("Max: 100 MB")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                 }
                 .padding(.horizontal)
-                
-                // Send File Section
-                GroupBox("Send File") {
-                    VStack(spacing: 12) {
-                        // Peer Selection
-                        HStack {
-                            Text("To:")
-                                .fontWeight(.medium)
-                            
-                            Picker("Select Peer", selection: $selectedPeerID) {
-                                Text("Select peer...").tag("")
-                                ForEach(Array(viewModel.connectedPeers), id: \.self) { peerID in
-                                    if let nickname = viewModel.meshService.getPeerNicknames()[peerID] {
-                                        Text("\(nickname) (\(peerID.prefix(8)))")
-                                            .tag(peerID)
-                                    } else {
-                                        Text(peerID)
-                                            .tag(peerID)
-                                    }
+                .padding(.vertical, 8)
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(8)
+            }
+            .padding(.horizontal)
+            
+            // Send File Section
+            GroupBox("Send File") {
+                VStack(spacing: 12) {
+                    // Peer Selection
+                    HStack {
+                        Text("To:")
+                            .fontWeight(.medium)
+                        
+                        Picker("Select Peer", selection: $selectedPeerID) {
+                            Text("Select peer...").tag("")
+                            ForEach(Array(viewModel.connectedPeers), id: \.self) { peerID in
+                                if let nickname = viewModel.meshService.getPeerNicknames()[peerID] {
+                                    Text("\(nickname) (\(peerID.prefix(8)))")
+                                        .tag(peerID)
+                                } else {
+                                    Text(peerID)
+                                        .tag(peerID)
                                 }
                             }
-                            .disabled(viewModel.connectedPeers.isEmpty)
                         }
-                        
-                        // File Picker Button
-                        Button(action: {
-                            showingFilePicker = true
-                        }) {
-                            HStack {
-                                Image(systemName: "doc.badge.plus")
-                                Text("Choose File")
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding()
-                            .background(selectedPeerID.isEmpty ? Color.gray : Color.blue)
-                            .foregroundColor(.white)
-                            .cornerRadius(10)
+                        .disabled(viewModel.connectedPeers.isEmpty)
+                    }
+                    
+                    // File Picker Button
+                    Button(action: {
+                        showingFilePicker = true
+                    }) {
+                        HStack {
+                            Image(systemName: "doc.badge.plus")
+                            Text("Choose File")
                         }
-                        .disabled(selectedPeerID.isEmpty)
-                        
-                        if viewModel.connectedPeers.isEmpty {
-                            Text("No connected peers")
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .padding(.top, 8)
+                        .frame(maxWidth: .infinity)
+                        .padding()
+                        .background(selectedPeerID.isEmpty ? Color.gray : Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(10)
+                    }
+                    .disabled(selectedPeerID.isEmpty)
+                    
+                    if viewModel.connectedPeers.isEmpty {
+                        Text("No connected peers")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .padding(.top, 8)
+                    }
+                }
+                .padding()
+            }
+            .padding(.horizontal)
+            
+            // Active Transfers
+            if !viewModel.fileTransferManager.activeTransfers.isEmpty {
+                GroupBox("Active Transfers") {
+                    LazyVStack(spacing: 8) {
+                        ForEach(Array(viewModel.fileTransferManager.activeTransfers.values), id: \.id) { transfer in
+                            FileTransferRowView(transfer: transfer, viewModel: viewModel)
                         }
                     }
-                    .padding()
+                    .padding(.vertical, 8)
                 }
                 .padding(.horizontal)
-                
-                // Active Transfers
-                if !viewModel.fileTransferManager.activeTransfers.isEmpty {
-                    GroupBox("Active Transfers") {
-                        LazyVStack(spacing: 8) {
-                            ForEach(Array(viewModel.fileTransferManager.activeTransfers.values), id: \.id) { transfer in
-                                FileTransferRowView(transfer: transfer, viewModel: viewModel)
-                            }
-                        }
-                        .padding(.vertical, 8)
-                    }
-                    .padding(.horizontal)
-                }
-                
-                // Transfer History
-                if !viewModel.fileTransferManager.transferHistory.isEmpty {
-                    GroupBox("Recent Transfers") {
-                        LazyVStack(spacing: 8) {
-                            ForEach(viewModel.fileTransferManager.transferHistory.suffix(5).reversed(), id: \.id) { transfer in
-                                FileTransferRowView(transfer: transfer, viewModel: viewModel)
-                            }
-                        }
-                        .padding(.vertical, 8)
-                    }
-                    .padding(.horizontal)
-                }
-                
-                Spacer()
             }
-            .navigationTitle("File Transfer")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button("Cancel") {
-                        presentationMode.wrappedValue.dismiss()
+            
+            // Transfer History
+            if !viewModel.fileTransferManager.transferHistory.isEmpty {
+                GroupBox("Recent Transfers") {
+                    LazyVStack(spacing: 8) {
+                        ForEach(viewModel.fileTransferManager.transferHistory.suffix(5).reversed(), id: \.id) { transfer in
+                            FileTransferRowView(transfer: transfer, viewModel: viewModel)
+                        }
                     }
+                    .padding(.vertical, 8)
                 }
+                .padding(.horizontal)
             }
+            
+            Spacer()
         }
         .onAppear {
             // Auto-select current chat recipient
@@ -336,7 +363,12 @@ struct FileTransferRowView: View {
                         
                         // Show percentage
                         if total > 0 {
-                            Text("\(Int((Double(complete) / Double(total)) * 100))%")
+                            let percentage = Int((Double(complete) / Double(total)) * 100)
+                            Text("\(percentage)%")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        } else {
+                            Text("0%")
                                 .font(.caption2)
                                 .foregroundColor(.secondary)
                         }

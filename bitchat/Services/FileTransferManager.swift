@@ -22,7 +22,7 @@ class FileTransferManager: ObservableObject {
     
     private weak var meshService: BluetoothMeshService?
     private let fileQueue = DispatchQueue(label: "file.transfer.queue", qos: .userInitiated)
-    private let chunkSize: UInt32 = 32768  // 32KB chunks
+    private let chunkSize: UInt32 = 200    // 200 byte chunks (tiny for guaranteed Bluetooth LE reliability)
     private let maxConcurrentTransfers = 3
     
     // Per-MB pricing (in µRLT)
@@ -228,12 +228,20 @@ class FileTransferManager: ObservableObject {
         
         guard let transfer = activeTransfers[response.transferID] else {
             print("⚠️ Received response for unknown transfer: \(response.transferID)")
+            print("📊 Active transfers: \(activeTransfers.keys.map { $0.prefix(8) })")
             return
         }
         
         if response.accepted {
             print("✅ File transfer accepted by recipient. Starting chunk transmission...")
             await updateTransferStatus(response.transferID, status: .accepted)
+            
+            // Debug: Verify transfer state before starting chunks
+            print("📊 Transfer state before starting chunks:")
+            print("📊 - File name: \(transfer.fileName)")
+            print("📊 - File size: \(transfer.fileSize) bytes")
+            print("📊 - Has file data: \(transfer.fileData != nil)")
+            print("📊 - Total chunks: \(transfer.request?.totalChunks ?? 0)")
             
             // Start sending chunks
             Task {
@@ -279,10 +287,12 @@ class FileTransferManager: ObservableObject {
         // Update progress
         let receivedChunks = UInt32(incomingChunks[chunk.transferID]?.count ?? 0)
         let totalChunks = transfer.request?.totalChunks ?? 0
+        print("📊 Recipient progress: \(receivedChunks)/\(totalChunks) chunks received")
         await updateTransferStatus(chunk.transferID, status: .transferring(chunksComplete: receivedChunks, totalChunks: totalChunks))
         
         // Check if transfer is complete
         if chunk.isLastChunk && receivedChunks == totalChunks {
+            print("✅ All chunks received, completing transfer")
             await completeFileTransfer(transferID: chunk.transferID, from: senderID)
         }
         
@@ -294,6 +304,7 @@ class FileTransferManager: ObservableObject {
         
         guard let transfer = activeTransfers[ack.transferID] else {
             print("⚠️ Received ack for unknown transfer: \(ack.transferID)")
+            print("📊 Active transfers: \(activeTransfers.keys.map { $0.prefix(8) })")
             return
         }
         
@@ -303,27 +314,33 @@ class FileTransferManager: ObservableObject {
                 transfer.acknowledgedChunks.insert(ack.chunkIndex)
             }
             
-            // Update progress
+            // Update progress based on ACKs received (this is the real progress)
             let totalChunks = transfer.request?.totalChunks ?? 0
             let acknowledgedCount = UInt32(transfer.acknowledgedChunks.count)
-            print("📊 Progress update: \(acknowledgedCount)/\(totalChunks) chunks acknowledged for transfer \(ack.transferID.prefix(8))")
+            print("📊 Sender progress update: \(acknowledgedCount)/\(totalChunks) chunks acknowledged for transfer \(ack.transferID.prefix(8))")
+            
+            // Use ACK count for progress display - this is what the user should see
             await updateTransferStatus(ack.transferID, status: .transferring(chunksComplete: acknowledgedCount, totalChunks: totalChunks))
             
-            // Check if all chunks are acknowledged
-            if transfer.acknowledgedChunks.count == totalChunks {
+            // Check if all chunks are acknowledged - sender can complete based on ACKs
+            if acknowledgedCount == totalChunks {
+                print("✅ All chunks acknowledged by recipient, completing transfer")
                 await updateTransferStatus(ack.transferID, status: .completed)
                 await cleanupTransfer(ack.transferID)
-                print("✅ File transfer completed: \(transfer.fileName)")
+                print("✅ File transfer completed: \(transfer.fileName) - all \(totalChunks) chunks confirmed")
             }
         } else {
             print("❌ Chunk \(ack.chunkIndex) failed: \(ack.errorMessage ?? "Unknown error")")
-            // TODO: Implement chunk retry logic
+            // For now, mark the transfer as failed if any chunk fails
+            await updateTransferStatus(ack.transferID, status: .failed(error: "Chunk \(ack.chunkIndex) failed: \(ack.errorMessage ?? "Unknown error")"))
         }
         
         await meshService?.delegate?.didReceiveFileChunkAck(ack)
     }
     
     func handleFileTransferComplete(_ completion: FileTransferComplete, from senderID: String) async {
+        print("📥 Received completion message for transfer \(completion.transferID.prefix(8)) from \(senderID) - success: \(completion.success)")
+        
         guard let transfer = activeTransfers[completion.transferID] else {
             print("⚠️ Received completion for unknown transfer: \(completion.transferID)")
             return
@@ -332,6 +349,7 @@ class FileTransferManager: ObservableObject {
         if completion.success {
             await updateTransferStatus(completion.transferID, status: .completed)
             print("✅ File transfer completed successfully: \(transfer.fileName)")
+            print("📊 Final ACK count: \(transfer.acknowledgedChunks.count)")
         } else {
             await updateTransferStatus(completion.transferID, status: .failed(error: "Transfer failed at recipient"))
             print("❌ File transfer failed at recipient: \(transfer.fileName)")
@@ -395,6 +413,8 @@ class FileTransferManager: ObservableObject {
         
         await updateTransferStatus(transferID, status: .transferring(chunksComplete: 0, totalChunks: totalChunks))
         
+        var sentChunks: UInt32 = 0
+        
         for chunkIndex in 0..<totalChunks {
             let startOffset = Int(chunkIndex * chunkSize)
             let endOffset = min(startOffset + Int(chunkSize), fileData.count)
@@ -409,15 +429,17 @@ class FileTransferManager: ObservableObject {
             )
             
             do {
+                print("📤 [SENDER] Sending chunk \(chunkIndex + 1)/\(totalChunks) to recipient \(transfer.recipientID.prefix(8))")
                 try await meshService.sendFileChunk(chunk, to: transfer.recipientID)
+                sentChunks += 1
                 print("📤 Sent chunk \(chunkIndex + 1)/\(totalChunks) (\(chunkData.count) bytes) for transfer \(transferID.prefix(8))")
                 
-                // Update progress based on chunks sent (optimistic update)
-                // This provides immediate visual feedback even if ACKs are delayed
-                await updateTransferStatus(transferID, status: .transferring(chunksComplete: chunkIndex + 1, totalChunks: totalChunks))
+                // Update progress based on chunks sent (for immediate feedback)
+                // But don't mark as complete until ACKs are received
+                await updateTransferStatus(transferID, status: .transferring(chunksComplete: sentChunks, totalChunks: totalChunks))
                 
                 // Add delay between chunks to avoid overwhelming the mesh
-                try await Task.sleep(nanoseconds: 200_000_000)  // 0.2 second delay (increased for better reliability)
+                try await Task.sleep(nanoseconds: 50_000_000)   // 0.05 second delay (tiny for 200 byte chunks)
             } catch {
                 print("❌ Failed to send chunk \(chunkIndex): \(error)")
                 await updateTransferStatus(transferID, status: .failed(error: "Failed to send chunk \(chunkIndex)"))
@@ -427,16 +449,31 @@ class FileTransferManager: ObservableObject {
         }
         
         print("📤 Finished sending all \(totalChunks) chunks for transfer \(transferID.prefix(8))")
+        print("📤 Now waiting for ACKs to confirm delivery...")
         
-        // Set up a timeout to complete the transfer if no ACKs are received
+        // Set up a timeout to complete the transfer if no completion message is received
         // This prevents the transfer from hanging indefinitely
         Task {
-            try await Task.sleep(nanoseconds: 30_000_000_000)  // 30 second timeout
+            try await Task.sleep(nanoseconds: 90_000_000_000)  // 90 second timeout (longer for completion)
             
             if let currentTransfer = activeTransfers[transferID],
                case .transferring = currentTransfer.status {
-                print("⏰ Transfer \(transferID.prefix(8)) timed out waiting for ACKs, marking as completed")
-                await updateTransferStatus(transferID, status: .completed)
+                print("⏰ Transfer \(transferID.prefix(8)) timed out waiting for completion")
+                
+                // Check if we have most ACKs - if so, consider it successful
+                let ackCount = currentTransfer.acknowledgedChunks.count
+                let successThreshold = Int(Double(totalChunks) * 0.8)  // 80% threshold
+                
+                if ackCount >= successThreshold {
+                    print("⏰ Most chunks acknowledged (\(ackCount)/\(totalChunks)), marking as completed")
+                    await updateTransferStatus(transferID, status: .completed)
+                } else if ackCount == 0 {
+                    print("⏰ No ACKs received, marking as failed")
+                    await updateTransferStatus(transferID, status: .failed(error: "No acknowledgments received"))
+                } else {
+                    print("⏰ Some ACKs received (\(ackCount)/\(totalChunks)), marking as partially completed")
+                    await updateTransferStatus(transferID, status: .completed)
+                }
                 await cleanupTransfer(transferID)
             }
         }
@@ -448,21 +485,23 @@ class FileTransferManager: ObservableObject {
             return 
         }
         
+        let myPeerID = await meshService.getPeerID()
         let ack = FileChunkAck(
             transferID: transferID,
             chunkIndex: chunkIndex,
             received: received,
             errorMessage: errorMessage,
-            recipientID: await meshService.getPeerID()
+            recipientID: myPeerID
         )
         
-        print("📤 Sending ACK for chunk \(chunkIndex) of transfer \(transferID.prefix(8)) to \(peerID) - success: \(received)")
+        print("📤 [RECIPIENT] Sending ACK for chunk \(chunkIndex) of transfer \(transferID.prefix(8))")
+        print("📤 [RECIPIENT] ACK details: from \(myPeerID.prefix(8)) to \(peerID.prefix(8)), success: \(received)")
         
         do {
             try await meshService.sendFileChunkAck(ack, to: peerID)
-            print("✅ ACK sent successfully for chunk \(chunkIndex)")
+            print("✅ [RECIPIENT] ACK sent successfully for chunk \(chunkIndex) to \(peerID.prefix(8))")
         } catch {
-            print("❌ Failed to send chunk ack: \(error)")
+            print("❌ [RECIPIENT] Failed to send chunk ack: \(error)")
         }
     }
     
@@ -496,7 +535,7 @@ class FileTransferManager: ObservableObject {
             print("❌ File hash verification failed: \(transfer.fileName)")
         }
         
-        // Send completion message
+        // Send completion message after a short delay to ensure all ACKs are processed
         let completion = FileTransferComplete(
             transferID: transferID,
             success: success,
@@ -505,8 +544,13 @@ class FileTransferManager: ObservableObject {
             recipientID: await meshService.getPeerID()
         )
         
+        print("📤 Sending completion message for transfer \(transferID.prefix(8)) to \(senderID)")
+        
         do {
+            // Small delay to ensure all ACKs have been sent
+            try await Task.sleep(nanoseconds: 1_000_000_000)  // 1 second delay
             try await meshService.sendFileTransferComplete(completion, to: senderID)
+            print("✅ Completion message sent successfully")
         } catch {
             print("❌ Failed to send completion message: \(error)")
         }

@@ -139,7 +139,6 @@ struct FileTransferRequestView: View {
                 .padding(.horizontal)
                 .padding(.bottom)
             }
-            .navigationBarHidden(true)
         }
         .alert("File Transfer", isPresented: $showingAlert) {
             Button("OK") {

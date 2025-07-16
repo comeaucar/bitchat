@@ -1079,24 +1079,36 @@ class BluetoothMeshService: NSObject {
     
     func sendFileChunk(_ chunk: FileChunk, to recipientID: String) async throws {
         guard let payloadData = chunk.encode() else {
+            print("❌ [MESH] Failed to encode FileChunk \(chunk.chunkIndex)")
             throw FileTransferError.invalidFileData
         }
         
         let packet = BitchatPacket(
-            type: MessageType.fileChunk.rawValue,
+            type: MessageType.message.rawValue,  // TEMPORARY: Use message type instead of fileChunk
             senderID: Data(myPeerID.utf8),
             recipientID: Data(recipientID.utf8),
             timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
             payload: payloadData,
             signature: nil,
-            ttl: 3  // Lower TTL for chunks to reduce network congestion
+            ttl: 2  // Very low TTL for chunks to reduce network congestion
         )
         
-        broadcastPacket(packet)
+        print("📤 [MESH] Broadcasting chunk \(chunk.chunkIndex) for transfer \(chunk.transferID.prefix(8))")
+        print("📤 [MESH] Chunk packet: \(myPeerID.prefix(8)) → \(recipientID.prefix(8)), payload: \(payloadData.count) bytes")
+        
+        // Try using optimized routing for file chunks to improve reliability
+        if payloadData.count > 512 {
+            sendPacketWithOptimizedRouting(packet, preference: .reliable)
+        } else {
+            broadcastPacket(packet)
+        }
+        
+        print("✅ [MESH] Chunk packet broadcasted for chunk \(chunk.chunkIndex)")
     }
     
     func sendFileChunkAck(_ ack: FileChunkAck, to recipientID: String) async throws {
         guard let payloadData = ack.encode() else {
+            print("❌ [MESH] Failed to encode FileChunkAck for chunk \(ack.chunkIndex)")
             throw FileTransferError.invalidFileData
         }
         
@@ -1107,10 +1119,16 @@ class BluetoothMeshService: NSObject {
             timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
             payload: payloadData,
             signature: nil,
-            ttl: 3
+            ttl: 2
         )
         
-        broadcastPacket(packet)
+        print("📤 [MESH] Broadcasting ACK for chunk \(ack.chunkIndex) of transfer \(ack.transferID.prefix(8))")
+        print("📤 [MESH] ACK packet: \(myPeerID.prefix(8)) → \(recipientID.prefix(8)), payload: \(payloadData.count) bytes")
+        
+        // Use optimized routing for ACKs to improve reliability
+        sendPacketWithOptimizedRouting(packet, preference: .reliable)
+        
+        print("✅ [MESH] ACK packet broadcasted for chunk \(ack.chunkIndex)")
     }
     
     func sendFileTransferComplete(_ completion: FileTransferComplete, to recipientID: String) async throws {
@@ -1480,7 +1498,7 @@ class BluetoothMeshService: NSObject {
     
     private func broadcastPacket(_ packet: BitchatPacket) {
         guard let data = packet.toBinaryData() else { 
-            // print("[ERROR] Failed to convert packet to binary data")
+            print("❌ [MESH] Failed to convert packet to binary data - type: \(packet.type), payload size: \(packet.payload.count)")
             // Add to retry queue if this is a message packet AND it's our own message
             if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
                senderID == self.myPeerID,
@@ -1500,6 +1518,8 @@ class BluetoothMeshService: NSObject {
             }
             return 
         }
+        
+        print("✅ [MESH] Packet converted to binary data - type: \(packet.type), size: \(data.count) bytes")
         
         
         // Send to connected peripherals (as central)
@@ -1645,6 +1665,19 @@ class BluetoothMeshService: NSObject {
         
         switch MessageType(rawValue: packet.type) {
         case .message:
+            // Check if this is actually a file chunk disguised as a message
+            if let recipientIDData = packet.recipientID,
+               let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8),
+               recipientID == myPeerID,
+               let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let chunk = FileChunk.decode(from: packet.payload) {
+                print("📥 [MESH] Received file chunk \(chunk.chunkIndex) (as message) from \(senderID) for transfer \(chunk.transferID.prefix(8))")
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileChunk(chunk, from: senderID)
+                }
+                return
+            }
+            
             // Unified message handler for both broadcast and private messages
             guard let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8) else {
                 return
@@ -2298,50 +2331,108 @@ class BluetoothMeshService: NSObject {
             }
             
         case .fileTransferRequest:
-            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+            if let recipientIDData = packet.recipientID,
+               let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8),
+               recipientID == myPeerID,
+               let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
                let request = FileTransferRequest.decode(from: packet.payload) {
-                print("📥 Received file transfer request from \(senderID): \(request.fileName)")
+                print("📥 [MESH] Received file transfer request from \(senderID): \(request.fileName)")
                 Task {
                     await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileTransferRequest(request, from: senderID)
+                }
+            } else {
+                print("❌ [MESH] Failed to process file transfer request")
+                if let recipientIDData = packet.recipientID,
+                   let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8) {
+                    print("❌ [MESH] Request not for us: intended for \(recipientID.prefix(8)), we are \(myPeerID.prefix(8))")
                 }
             }
             
         case .fileTransferResponse:
-            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+            if let recipientIDData = packet.recipientID,
+               let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8),
+               recipientID == myPeerID,
+               let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
                let response = FileTransferResponse.decode(from: packet.payload) {
+                print("📥 [MESH] Received file transfer response from \(senderID) for transfer \(response.transferID.prefix(8))")
                 Task {
                     await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileTransferResponse(response, from: senderID)
+                }
+            } else {
+                print("❌ [MESH] Failed to process file transfer response")
+                if let recipientIDData = packet.recipientID,
+                   let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8) {
+                    print("❌ [MESH] Response not for us: intended for \(recipientID.prefix(8)), we are \(myPeerID.prefix(8))")
                 }
             }
             
         case .fileChunk:
-            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+            print("📥 [MESH] Received fileChunk packet: \(packet.payload.count) bytes")
+            let senderIDStr = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8) ?? "unknown"
+            let recipientIDStr = packet.recipientID.flatMap { String(data: $0.trimmingNullBytes(), encoding: .utf8) } ?? "unknown"
+            print("📥 [MESH] Chunk packet: \(senderIDStr.prefix(8)) → \(recipientIDStr.prefix(8)), myPeerID: \(myPeerID.prefix(8))")
+            
+            if let recipientIDData = packet.recipientID,
+               let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8),
+               recipientID == myPeerID,
+               let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
                let chunk = FileChunk.decode(from: packet.payload) {
-                print("📥 Received file chunk \(chunk.chunkIndex) from \(senderID) for transfer \(chunk.transferID.prefix(8))")
-                print("📥 Chunk size: \(chunk.chunkData.count) bytes, isLast: \(chunk.isLastChunk)")
+                print("📥 [MESH] Received file chunk \(chunk.chunkIndex) from \(senderID) for transfer \(chunk.transferID.prefix(8))")
+                print("📥 [MESH] Chunk details: size=\(chunk.chunkData.count) bytes, isLast=\(chunk.isLastChunk)")
+                print("📥 [MESH] Packet route: \(senderID.prefix(8)) → \(myPeerID.prefix(8))")
                 Task {
                     await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileChunk(chunk, from: senderID)
                 }
             } else {
-                print("❌ Failed to decode file chunk from \(packet.payload.count) bytes")
+                print("❌ [MESH] Failed to process file chunk from \(packet.payload.count) bytes")
+                print("❌ [MESH] Packet details: sender=\(senderIDStr), recipient=\(recipientIDStr)")
+                if let recipientIDData = packet.recipientID,
+                   let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8) {
+                    if recipientID != myPeerID {
+                        print("❌ [MESH] Chunk not for us: intended for \(recipientID.prefix(8)), we are \(myPeerID.prefix(8))")
+                    } else {
+                        print("❌ [MESH] Chunk for us but failed to decode")
+                    }
+                }
             }
             
         case .fileChunkAck:
-            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+            if let recipientIDData = packet.recipientID,
+               let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8),
+               recipientID == myPeerID,
+               let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
                let ack = FileChunkAck.decode(from: packet.payload) {
-                print("📥 Received file chunk ACK \(ack.chunkIndex) from \(senderID) for transfer \(ack.transferID.prefix(8)) - success: \(ack.received)")
+                print("📥 [MESH] Received file chunk ACK \(ack.chunkIndex) from \(senderID) for transfer \(ack.transferID.prefix(8)) - success: \(ack.received)")
+                print("📥 [MESH] ACK details: from \(senderID.prefix(8)) to \(myPeerID.prefix(8)), recipientID in ACK: \(ack.recipientID.prefix(8))")
                 Task {
                     await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileChunkAck(ack, from: senderID)
                 }
             } else {
-                print("❌ Failed to decode file chunk ACK from \(packet.payload.count) bytes")
+                print("❌ [MESH] Failed to decode file chunk ACK from \(packet.payload.count) bytes")
+                let senderIDStr = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8) ?? "unknown"
+                let recipientIDStr = packet.recipientID.flatMap { String(data: $0.trimmingNullBytes(), encoding: .utf8) } ?? "unknown"
+                print("❌ [MESH] Packet details: sender=\(senderIDStr), recipient=\(recipientIDStr)")
+                if let recipientIDData = packet.recipientID,
+                   let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8) {
+                    print("❌ [MESH] ACK not for us: intended for \(recipientID.prefix(8)), we are \(myPeerID.prefix(8))")
+                }
             }
             
         case .fileTransferComplete:
-            if let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+            if let recipientIDData = packet.recipientID,
+               let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8),
+               recipientID == myPeerID,
+               let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
                let completion = FileTransferComplete.decode(from: packet.payload) {
+                print("📥 [MESH] Received file transfer completion from \(senderID) for transfer \(completion.transferID.prefix(8))")
                 Task {
                     await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileTransferComplete(completion, from: senderID)
+                }
+            } else {
+                print("❌ [MESH] Failed to process file transfer completion")
+                if let recipientIDData = packet.recipientID,
+                   let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8) {
+                    print("❌ [MESH] Completion not for us: intended for \(recipientID.prefix(8)), we are \(myPeerID.prefix(8))")
                 }
             }
             
@@ -2549,12 +2640,12 @@ extension BluetoothMeshService: CBCentralManagerDelegate {
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
         // Optimize for 300m range - only connect to strong enough signals
         let rssiValue = RSSI.intValue
-        print("[BLUETOOTH DEBUG] Discovered peripheral: \(peripheral.name ?? "Unknown") ID: \(peripheral.identifier) RSSI: \(rssiValue)")
+       // print("[BLUETOOTH DEBUG] Discovered peripheral: \(peripheral.name ?? "Unknown") ID: \(peripheral.identifier) RSSI: \(rssiValue)")
         
         // Filter out very weak signals (below -90 dBm) to save battery
         // TEMPORARILY LOWERED FOR DEBUGGING
         guard rssiValue > -100 else { 
-            print("[BLUETOOTH DEBUG] Ignoring peripheral due to very weak signal")
+         //   print("[BLUETOOTH DEBUG] Ignoring peripheral due to very weak signal")
             return 
         }
         
@@ -2838,12 +2929,15 @@ private static func SHA256hexPrefix(of data: Data) -> String {
         guard let data = characteristic.value else {
             return
         }
+        
+        // Debug all incoming packets
+        print("📡 [RAW] Received packet: \(data.count) bytes")
 
         // ─── HopLogger --------------------------------------------------------
         if let uuid = Self.extractMessageUUID(from: data) {
             HopLogger.shared.recordHop(messageID: uuid)
             let hops = HopLogger.shared.hopCount(for: uuid) ?? 0   // correct API
-            print("🪄 HopLogger \(uuid) → hop \(hops)")
+            //print("🪄 HopLogger \(uuid) → hop \(hops)")
         }
         
         guard let packet = BitchatPacket.from(data) else { 

@@ -33,75 +33,90 @@ struct WalletView: View {
     }
     
     var body: some View {
-        NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    if isLoading {
-                        ProgressView("Loading wallet...")
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .foregroundColor(textColor)
-                    } else if let errorMessage = errorMessage {
-                        VStack(spacing: 16) {
-                            Image(systemName: "exclamationmark.triangle")
-                                .font(.system(size: 48))
-                                .foregroundColor(.orange)
-                            
-                            Text("Error Loading Wallet")
-                                .font(.title2)
-                                .fontWeight(.bold)
-                                .foregroundColor(textColor)
-                            
-                            Text(errorMessage)
-                                .font(.body)
-                                .foregroundColor(secondaryTextColor)
-                                .multilineTextAlignment(.center)
-                        }
-                        .padding()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        // Balance Card
-                        if let stats = walletStats {
-                            balanceCard(stats: stats)
-                        }
-                        
-                        // Stats Cards
-                        if let stats = walletStats {
-                            statsCards(stats: stats)
-                        }
-                        
-                        // Wallet Info
-                        walletInfoCard()
-                        
-                        // Temporary reset button for testing/cleanup
-                        resetDataCard()
-                    }
+        #if os(macOS)
+        VStack(spacing: 0) {
+            // Custom header for macOS
+            HStack {
+                Text("Wallet")
+                    .font(.system(size: 20, weight: .bold, design: .monospaced))
+                    .foregroundColor(textColor)
+                Spacer()
+                Button("Done") {
+                    dismiss()
                 }
+                .buttonStyle(.plain)
+                .foregroundColor(textColor)
                 .padding()
             }
-            .background(backgroundColor)
-            .navigationTitle("Wallet")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.large)
-            #endif
-            .navigationBarBackground(color: backgroundColor)
-            .toolbar {
-                #if os(iOS)
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                    .foregroundColor(textColor)
-                }
-                #else
-                ToolbarItem(placement: .primaryAction) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                    .foregroundColor(textColor)
-                }
-                #endif
-            }
+            .background(backgroundColor.opacity(0.95))
+            
+            walletContent
         }
+        .frame(width: 600, height: 700)
+        #else
+        NavigationView {
+            walletContent
+                .navigationTitle("Wallet")
+                .navigationBarTitleDisplayMode(.large)
+                .navigationBarBackground(color: backgroundColor)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarTrailing) {
+                        Button("Done") {
+                            dismiss()
+                        }
+                        .foregroundColor(textColor)
+                    }
+                }
+        }
+        #endif
+    }
+    
+    private var walletContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if isLoading {
+                    ProgressView("Loading wallet...")
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .foregroundColor(textColor)
+                } else if let errorMessage = errorMessage {
+                    VStack(spacing: 16) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 48))
+                            .foregroundColor(.orange)
+                        
+                        Text("Error Loading Wallet")
+                            .font(.title2)
+                            .fontWeight(.bold)
+                            .foregroundColor(textColor)
+                        
+                        Text(errorMessage)
+                            .font(.body)
+                            .foregroundColor(secondaryTextColor)
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    // Balance Card
+                    if let stats = walletStats {
+                        balanceCard(stats: stats)
+                    }
+                    
+                    // Stats Cards
+                    if let stats = walletStats {
+                        statsCards(stats: stats)
+                    }
+                    
+                    // Wallet Info
+                    walletInfoCard()
+                    
+                    // Temporary reset button for testing/cleanup
+                    resetDataCard()
+                }
+            }
+            .padding()
+        }
+        .background(backgroundColor)
         .foregroundColor(textColor)
         .onAppear {
             loadWalletStats()
