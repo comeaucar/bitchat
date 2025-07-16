@@ -267,6 +267,7 @@ enum MessageType: UInt8 {
     case fileTransferResponse = 0x0E  // Accept/reject file transfer
     case fileChunk = 0x0F  // File chunk with data
     case fileChunkAck = 0x10  // Acknowledge receipt of file chunk
+    case fileChunkStatus = 0x13  // Block ACK with missing chunk bitmap
     case fileTransferComplete = 0x11  // All chunks received successfully
     case fileTransferCancel = 0x12  // Cancel file transfer
 }
@@ -505,7 +506,7 @@ struct FileChunk: Codable {
     let transferID: String
     let chunkIndex: UInt32  // 0-based chunk index
     let chunkData: Data
-    let chunkHash: String  // SHA-256 hash of this chunk for verification
+    let chunkCRC: UInt32    // CRC-32 instead of SHA-256 for efficiency
     let isLastChunk: Bool
     let timestamp: Date
     
@@ -513,20 +514,245 @@ struct FileChunk: Codable {
         self.transferID = transferID
         self.chunkIndex = chunkIndex
         self.chunkData = chunkData
-        self.chunkHash = SHA256.hash(data: chunkData).compactMap { String(format: "%02x", $0) }.joined()
+        self.chunkCRC = Self.calculateCRC32(data: chunkData)
         self.isLastChunk = isLastChunk
         self.timestamp = Date()
     }
     
+    // Binary encoding instead of JSON to reduce overhead
     func encode() -> Data? {
-        try? JSONEncoder().encode(self)
+        var data = Data()
+        
+        // Transfer ID (full UUID string as UTF-8)
+        let transferIDData = Data(transferID.utf8)
+        let transferIDLength = UInt8(min(transferIDData.count, 255))
+        data.append(transferIDLength)
+        data.append(transferIDData.prefix(Int(transferIDLength)))
+        
+        // Chunk index (4 bytes)
+        data.append(contentsOf: withUnsafeBytes(of: chunkIndex.bigEndian) { Array($0) })
+        
+        // Chunk data length (2 bytes)
+        let dataLength = UInt16(chunkData.count)
+        data.append(contentsOf: withUnsafeBytes(of: dataLength.bigEndian) { Array($0) })
+        
+        // Chunk data
+        data.append(chunkData)
+        
+        // CRC-32 (4 bytes)
+        data.append(contentsOf: withUnsafeBytes(of: chunkCRC.bigEndian) { Array($0) })
+        
+        // Flags (1 byte)
+        var flags: UInt8 = 0
+        if isLastChunk { flags |= 0x01 }
+        data.append(flags)
+        
+        return data
     }
     
     static func decode(from data: Data) -> FileChunk? {
-        try? JSONDecoder().decode(FileChunk.self, from: data)
+        // Create a safe copy to avoid memory issues
+        let safeData = Data(data)
+        
+        // Check if this looks like JSON data (starts with '{')
+        if safeData.first == 0x7B {  // '{' character
+            print("📥 [DECODE] Detected JSON format, but binary format expected")
+            // For now, reject JSON format - we need to ensure all senders use binary
+            return nil
+        }
+        
+        // Fall back to binary decoding
+        guard safeData.count >= 7 else {  // 1 byte length + at least 6 bytes for minimum data
+            print("📥 [DECODE] Binary decode failed: insufficient data (\(safeData.count) bytes)")
+            return nil 
+        }
+        
+        print("📥 [DECODE] Attempting binary decode of \(safeData.count) bytes")
+        var offset = 0
+        
+        // Transfer ID (variable length string)
+        guard offset < safeData.count else { return nil }
+        let transferIDLength = Int(safeData[offset])
+        offset += 1
+        
+        guard offset + transferIDLength <= safeData.count else { return nil }
+        let transferIDData = safeData.subdata(in: offset..<offset+transferIDLength)
+        guard let transferID = String(data: transferIDData, encoding: .utf8) else { return nil }
+        offset += transferIDLength
+        
+        // Chunk index (4 bytes) - safe integer parsing
+        guard offset + 4 <= safeData.count else { return nil }
+        let chunkIndexBytes = safeData.subdata(in: offset..<offset+4)
+        let chunkIndex = chunkIndexBytes.withUnsafeBytes { bytes in
+            bytes.load(as: UInt32.self).bigEndian
+        }
+        offset += 4
+        
+        // Chunk data length (2 bytes) - safe integer parsing
+        guard offset + 2 <= safeData.count else { return nil }
+        let dataLengthBytes = safeData.subdata(in: offset..<offset+2)
+        let dataLength = dataLengthBytes.withUnsafeBytes { bytes in
+            bytes.load(as: UInt16.self).bigEndian
+        }
+        offset += 2
+        
+        // Validate data length is reasonable
+        guard dataLength <= 1024 else { return nil }  // Max 1KB chunk
+        
+        // Chunk data - safe bounds checking
+        guard offset + Int(dataLength) + 4 + 1 <= safeData.count else { return nil }
+        let chunkData = safeData.subdata(in: offset..<offset+Int(dataLength))
+        offset += Int(dataLength)
+        
+        // CRC-32 (4 bytes) - safe integer parsing
+        guard offset + 4 <= safeData.count else { return nil }
+        let crcBytes = safeData.subdata(in: offset..<offset+4)
+        let chunkCRC = crcBytes.withUnsafeBytes { bytes in
+            bytes.load(as: UInt32.self).bigEndian
+        }
+        offset += 4
+        
+        // Flags (1 byte) - safe bounds checking
+        guard offset < safeData.count else { return nil }
+        let flags = safeData[offset]
+        let isLastChunk = (flags & 0x01) != 0
+        
+        // Verify CRC
+        let calculatedCRC = calculateCRC32(data: chunkData)
+        guard calculatedCRC == chunkCRC else { 
+            print("📥 [DECODE] CRC mismatch: calculated \(calculatedCRC), expected \(chunkCRC)")
+            return nil 
+        }
+        
+        print("📥 [DECODE] Successfully decoded chunk \(chunkIndex) for transfer \(transferID.prefix(8)) with \(chunkData.count) bytes")
+        
+        return FileChunk(
+            transferID: transferID,
+            chunkIndex: chunkIndex,
+            chunkData: chunkData,
+            isLastChunk: isLastChunk
+        )
+    }
+    
+    // CRC-32 calculation
+    private static func calculateCRC32(data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFFFFFF
+        let polynomial: UInt32 = 0xEDB88320
+        
+        for byte in data {
+            crc ^= UInt32(byte)
+            for _ in 0..<8 {
+                if crc & 1 != 0 {
+                    crc = (crc >> 1) ^ polynomial
+                } else {
+                    crc >>= 1
+                }
+            }
+        }
+        
+        return ~crc
     }
 }
 
+// Block ACK with missing chunk bitmap instead of per-chunk ACK
+struct FileChunkStatus: Codable {
+    let transferID: String
+    let highestChunkReceived: UInt32
+    let missingChunks: [UInt32]  // List of missing chunk indices
+    let recipientID: String
+    let timestamp: Date
+    
+    init(transferID: String, highestChunkReceived: UInt32, missingChunks: [UInt32], recipientID: String) {
+        self.transferID = transferID
+        self.highestChunkReceived = highestChunkReceived
+        self.missingChunks = missingChunks
+        self.recipientID = recipientID
+        self.timestamp = Date()
+    }
+    
+    // Binary encoding for efficiency
+    func encode() -> Data? {
+        var data = Data()
+        
+        // Transfer ID (full UUID string as UTF-8)
+        let transferIDData = Data(transferID.utf8)
+        let transferIDLength = UInt8(min(transferIDData.count, 255))
+        data.append(transferIDLength)
+        data.append(transferIDData.prefix(Int(transferIDLength)))
+        
+        // Highest chunk received (4 bytes)
+        data.append(contentsOf: withUnsafeBytes(of: highestChunkReceived.bigEndian) { Array($0) })
+        
+        // Missing chunks count (2 bytes)
+        let missingCount = UInt16(min(missingChunks.count, 65535))
+        data.append(contentsOf: withUnsafeBytes(of: missingCount.bigEndian) { Array($0) })
+        
+        // Missing chunk indices (4 bytes each)
+        for chunkIndex in missingChunks.prefix(Int(missingCount)) {
+            data.append(contentsOf: withUnsafeBytes(of: chunkIndex.bigEndian) { Array($0) })
+        }
+        
+        return data
+    }
+    
+    static func decode(from data: Data) -> FileChunkStatus? {
+        // Create a safe copy to avoid memory issues
+        let safeData = Data(data)
+        guard safeData.count >= 7 else { return nil }  // Minimum size
+        
+        var offset = 0
+        
+        // Transfer ID (variable length string)
+        guard offset < safeData.count else { return nil }
+        let transferIDLength = Int(safeData[offset])
+        offset += 1
+        
+        guard offset + transferIDLength <= safeData.count else { return nil }
+        let transferIDData = safeData.subdata(in: offset..<offset+transferIDLength)
+        guard let transferID = String(data: transferIDData, encoding: .utf8) else { return nil }
+        offset += transferIDLength
+        
+        // Highest chunk received (4 bytes) - safe integer parsing
+        guard offset + 4 <= safeData.count else { return nil }
+        let highestChunkBytes = safeData.subdata(in: offset..<offset+4)
+        let highestChunkReceived = highestChunkBytes.withUnsafeBytes { bytes in
+            bytes.load(as: UInt32.self).bigEndian
+        }
+        offset += 4
+        
+        // Missing chunks count (2 bytes) - safe integer parsing
+        guard offset + 2 <= safeData.count else { return nil }
+        let missingCountBytes = safeData.subdata(in: offset..<offset+2)
+        let missingCount = missingCountBytes.withUnsafeBytes { bytes in
+            bytes.load(as: UInt16.self).bigEndian
+        }
+        offset += 2
+        
+        // Validate missing count is reasonable
+        guard missingCount <= 10000 else { return nil }  // Max 10k missing chunks
+        
+        // Missing chunk indices - safe bounds checking
+        var missingChunks: [UInt32] = []
+        for _ in 0..<missingCount {
+            guard offset + 4 <= safeData.count else { return nil }
+            let chunkIndexBytes = safeData.subdata(in: offset..<offset+4)
+            let chunkIndex = chunkIndexBytes.withUnsafeBytes { bytes in
+                bytes.load(as: UInt32.self).bigEndian
+            }
+            missingChunks.append(chunkIndex)
+            offset += 4
+        }
+        
+        return FileChunkStatus(
+            transferID: transferID,
+            highestChunkReceived: highestChunkReceived,
+            missingChunks: missingChunks,
+            recipientID: ""  // Will be set from packet sender
+        )
+    }
+}
+
+// Keep the old FileChunkAck for backward compatibility during transition
 struct FileChunkAck: Codable {
     let transferID: String
     let chunkIndex: UInt32
@@ -662,6 +888,7 @@ protocol BitchatDelegate: AnyObject {
     func didReceiveFileTransferResponse(_ response: FileTransferResponse)
     func didReceiveFileChunk(_ chunk: FileChunk)
     func didReceiveFileChunkAck(_ ack: FileChunkAck)
+    func didReceiveFileChunkStatus(_ status: FileChunkStatus)
     func didReceiveFileTransferComplete(_ completion: FileTransferComplete)
     func didReceiveFileTransferCancel(_ cancellation: FileTransferCancel)
     func didUpdateFileTransferStatus(_ transferID: String, status: FileTransferStatus)
@@ -719,6 +946,10 @@ extension BitchatDelegate {
     }
     
     func didReceiveFileChunkAck(_ ack: FileChunkAck) {
+        // Default empty implementation
+    }
+    
+    func didReceiveFileChunkStatus(_ status: FileChunkStatus) {
         // Default empty implementation
     }
     

@@ -22,7 +22,7 @@ class FileTransferManager: ObservableObject {
     
     private weak var meshService: BluetoothMeshService?
     private let fileQueue = DispatchQueue(label: "file.transfer.queue", qos: .userInitiated)
-    private let chunkSize: UInt32 = 200    // 200 byte chunks (tiny for guaranteed Bluetooth LE reliability)
+    private let chunkSize: UInt32 = 150    // 150 byte chunks to stay within BLE MTU limits after binary encoding
     private let maxConcurrentTransfers = 3
     
     // Per-MB pricing (in µRLT)
@@ -267,13 +267,9 @@ class FileTransferManager: ObservableObject {
             return
         }
         
-        // Verify chunk hash
-        let calculatedHash = SHA256.hash(data: chunk.chunkData).compactMap { String(format: "%02x", $0) }.joined()
-        guard calculatedHash == chunk.chunkHash else {
-            print("❌ Chunk hash mismatch for chunk \(chunk.chunkIndex)")
-            await sendChunkAck(transferID: chunk.transferID, chunkIndex: chunk.chunkIndex, received: false, errorMessage: "Hash mismatch", to: senderID)
-            return
-        }
+        // Verify chunk CRC (CRC verification is now handled in FileChunk.decode())
+        // The decode method already verified the CRC, so if we got here, the chunk is valid
+        print("✅ Chunk \(chunk.chunkIndex) CRC verified")
         
         // Store chunk (thread-safe)
         await withCheckedContinuation { continuation in
@@ -310,9 +306,137 @@ class FileTransferManager: ObservableObject {
             await completeFileTransfer(transferID: chunk.transferID, from: senderID)
         } else if chunk.isLastChunk {
             print("⚠️ Received last chunk but receivedChunks (\(receivedChunks)) != totalChunks (\(totalChunks))")
+            
+            // Find missing chunks
+            await findMissingChunks(transferID: chunk.transferID, totalChunks: totalChunks)
         }
         
         await meshService?.delegate?.didReceiveFileChunk(chunk)
+    }
+    
+    private func findMissingChunks(transferID: String, totalChunks: UInt32) async {
+        let missingChunks = await withCheckedContinuation { continuation in
+            chunkQueue.async {
+                let receivedChunks = self.incomingChunks[transferID] ?? [:]
+                var missing: [UInt32] = []
+                
+                for chunkIndex in 0..<totalChunks {
+                    if receivedChunks[chunkIndex] == nil {
+                        missing.append(chunkIndex)
+                    }
+                }
+                
+                continuation.resume(returning: missing)
+            }
+        }
+        
+        if !missingChunks.isEmpty {
+            print("📊 Missing chunks for transfer \(transferID.prefix(8)): \(missingChunks.count) chunks")
+            print("📊 Missing chunk indices: \(missingChunks.prefix(20))") // Show first 20 missing chunks
+            
+            // Wait for retransmissions - sender now has up to 5 attempts with exponential backoff
+            // Need to wait longer for all retransmission attempts
+            Task {
+                print("📊 [RECIPIENT] Waiting for retransmissions... (up to 3 minutes)")
+                
+                // Check progress every 10 seconds during wait period
+                for waitTime in stride(from: 10, through: 180, by: 10) {  // Wait up to 3 minutes
+                    do {
+                        try await Task.sleep(nanoseconds: 10_000_000_000) // Wait 10 seconds
+                    } catch {
+                        print("⚠️ [RECIPIENT] Sleep interrupted: \(error)")
+                        break
+                    }
+                    
+                    // Check if we got more chunks
+                    let currentMissing = await withCheckedContinuation { continuation in
+                        chunkQueue.async {
+                            let receivedChunks = self.incomingChunks[transferID] ?? [:]
+                            var missing: [UInt32] = []
+                            
+                            for chunkIndex in 0..<totalChunks {
+                                if receivedChunks[chunkIndex] == nil {
+                                    missing.append(chunkIndex)
+                                }
+                            }
+                            
+                            continuation.resume(returning: missing)
+                        }
+                    }
+                    
+                    if currentMissing.isEmpty {
+                        print("✅ [RECIPIENT] All chunks received during wait period (after \(waitTime)s)")
+                        if let transfer = self.activeTransfers[transferID] {
+                            await self.completeFileTransfer(transferID: transferID, from: transfer.senderID)
+                        }
+                        return
+                    } else {
+                        print("📊 [RECIPIENT] Still missing \(currentMissing.count) chunks after \(waitTime)s")
+                        
+                        // Update progress to show we're still waiting
+                        let receivedCount = totalChunks - UInt32(currentMissing.count)
+                        await self.updateTransferStatus(transferID, status: .transferring(chunksComplete: receivedCount, totalChunks: totalChunks))
+                        
+                        // Check if we have enough chunks to complete (95% threshold)
+                        let successRate = Double(receivedCount) / Double(totalChunks)
+                        if successRate >= 0.95 && waitTime >= 60 {  // After 1 minute, accept 95% success
+                            print("✅ [RECIPIENT] High success rate (\(Int(successRate * 100))%) reached, completing transfer")
+                            if let transfer = self.activeTransfers[transferID] {
+                                await self.completeFileTransfer(transferID: transferID, from: transfer.senderID)
+                            }
+                            return
+                        }
+                    }
+                }
+                
+                print("📊 [RECIPIENT] Wait period complete, checking final status...")
+                
+                // Check again if we got more chunks
+                let stillMissing = await withCheckedContinuation { continuation in
+                    chunkQueue.async {
+                        let receivedChunks = self.incomingChunks[transferID] ?? [:]
+                        var stillMissing: [UInt32] = []
+                        
+                        for chunkIndex in 0..<totalChunks {
+                            if receivedChunks[chunkIndex] == nil {
+                                stillMissing.append(chunkIndex)
+                            }
+                        }
+                        
+                        continuation.resume(returning: stillMissing)
+                    }
+                }
+                
+                if stillMissing.isEmpty {
+                    print("✅ All missing chunks received during wait period")
+                    // Get sender ID from the transfer
+                    if let transfer = self.activeTransfers[transferID] {
+                        await self.completeFileTransfer(transferID: transferID, from: transfer.senderID)
+                    }
+                } else {
+                    print("⚠️ Still missing \(stillMissing.count) chunks after wait period")
+                    await self.updateTransferStatus(transferID, status: .failed(error: "Missing \(stillMissing.count) chunks"))
+                }
+            }
+        }
+    }
+    
+    func handleFileChunkStatus(_ status: FileChunkStatus, from senderID: String) async {
+        print("📥 Received chunk status for transfer \(status.transferID.prefix(8)) from \(senderID)")
+        print("📥 Status details: highest chunk \(status.highestChunkReceived), missing \(status.missingChunks.count) chunks")
+        
+        guard let transfer = activeTransfers[status.transferID] else {
+            print("⚠️ Received chunk status for unknown transfer: \(status.transferID)")
+            return
+        }
+        
+        // If we have missing chunks, retransmit them immediately
+        if !status.missingChunks.isEmpty {
+            print("📤 Retransmitting \(status.missingChunks.count) missing chunks based on status feedback")
+            await retransmitSpecificChunks(transferID: status.transferID, transfer: transfer, missingChunks: status.missingChunks)
+        }
+        
+        await meshService?.delegate?.didReceiveFileChunkStatus(status)
     }
     
     func handleFileChunkAck(_ ack: FileChunkAck, from senderID: String) async {
@@ -332,7 +456,9 @@ class FileTransferManager: ObservableObject {
             
             // Update progress based on ACKs received (this is the real progress)
             let totalChunks = transfer.request?.totalChunks ?? 0
-            let acknowledgedCount = UInt32(transfer.acknowledgedChunks.count)
+            let acknowledgedCount = await MainActor.run {
+                UInt32(transfer.acknowledgedChunks.count)
+            }
             print("📊 Sender progress update: \(acknowledgedCount)/\(totalChunks) chunks acknowledged for transfer \(ack.transferID.prefix(8))")
             
             // Use ACK count for progress display - this is what the user should see
@@ -366,7 +492,8 @@ class FileTransferManager: ObservableObject {
         if completion.success {
             await updateTransferStatus(completion.transferID, status: .completed)
             print("✅ [SENDER] File transfer completed successfully: \(transfer.fileName)")
-            print("📊 [SENDER] Final ACK count: \(transfer.acknowledgedChunks.count)")
+            let finalAckCount = await MainActor.run { transfer.acknowledgedChunks.count }
+            print("📊 [SENDER] Final ACK count: \(finalAckCount)")
         } else {
             await updateTransferStatus(completion.transferID, status: .failed(error: "Transfer failed at recipient"))
             print("❌ [SENDER] File transfer failed at recipient: \(transfer.fileName)")
@@ -447,17 +574,16 @@ class FileTransferManager: ObservableObject {
             )
             
             do {
-                print("📤 [SENDER] Sending chunk \(chunkIndex + 1)/\(totalChunks) to recipient \(transfer.recipientID.prefix(8))")
+                print("📤 [SENDER] Sending chunk \(chunkIndex) (chunk \(chunkIndex + 1)/\(totalChunks)) to recipient \(transfer.recipientID.prefix(8))")
                 try await meshService.sendFileChunk(chunk, to: transfer.recipientID)
                 sentChunks += 1
-                print("📤 Sent chunk \(chunkIndex + 1)/\(totalChunks) (\(chunkData.count) bytes) for transfer \(transferID.prefix(8))")
+                print("📤 Sent chunk \(chunkIndex) (\(chunkData.count) bytes) for transfer \(transferID.prefix(8))")
                 
-                // Update progress based on chunks sent (for immediate feedback)
-                // But don't mark as complete until ACKs are received
-                await updateTransferStatus(transferID, status: .transferring(chunksComplete: sentChunks, totalChunks: totalChunks))
+                // Note: Progress is updated only based on ACKs received, not chunks sent
+                // This prevents the progress bar from jumping between send progress and ACK progress
                 
                 // Add delay between chunks to avoid overwhelming the mesh
-                try await Task.sleep(nanoseconds: 50_000_000)   // 0.05 second delay (tiny for 200 byte chunks)
+                try await Task.sleep(nanoseconds: 200_000_000)   // 0.2 second delay (tiny for 200 byte chunks)
             } catch {
                 print("❌ Failed to send chunk \(chunkIndex): \(error)")
                 await updateTransferStatus(transferID, status: .failed(error: "Failed to send chunk \(chunkIndex)"))
@@ -469,18 +595,62 @@ class FileTransferManager: ObservableObject {
         print("📤 Finished sending all \(totalChunks) chunks for transfer \(transferID.prefix(8))")
         print("📤 Now waiting for ACKs to confirm delivery...")
         
+        // Check for missing ACKs and retransmit if needed (multiple attempts)
+        Task {
+            do {
+                try await Task.sleep(nanoseconds: 10_000_000_000)  // Wait 10 seconds for ACKs
+            } catch {
+                print("⚠️ [SENDER] Initial sleep interrupted: \(error)")
+                return
+            }
+            
+            // Multiple retransmission attempts to handle high packet loss
+            for attempt in 1...5 {  // Up to 5 attempts
+                if let currentTransfer = activeTransfers[transferID],
+                   case .transferring = currentTransfer.status {
+                    let ackCount = await MainActor.run { currentTransfer.acknowledgedChunks.count }
+                    let missingAcks = Int(totalChunks) - ackCount
+                    
+                    if missingAcks > 0 {
+                        print("⚠️ Missing \(missingAcks) ACKs for transfer \(transferID.prefix(8)) - Attempt \(attempt)")
+                        await retransmitMissingChunks(transferID: transferID, transfer: currentTransfer, attempt: attempt)
+                        
+                        // Wait between attempts with exponential backoff
+                        let backoffDelay = min(15_000_000_000 * UInt64(attempt), 60_000_000_000)  // Max 60 seconds
+                        do {
+                            try await Task.sleep(nanoseconds: backoffDelay)
+                        } catch {
+                            print("⚠️ [SENDER] Backoff sleep interrupted: \(error)")
+                            break
+                        }
+                    } else {
+                        print("✅ All ACKs received after \(attempt) attempts")
+                        break
+                    }
+                } else {
+                    print("📊 Transfer \(transferID.prefix(8)) no longer active")
+                    break
+                }
+            }
+        }
+        
         // Set up a timeout to complete the transfer if no completion message is received
         // This prevents the transfer from hanging indefinitely
         Task {
-            try await Task.sleep(nanoseconds: 90_000_000_000)  // 90 second timeout (longer for completion)
+            do {
+                try await Task.sleep(nanoseconds: 240_000_000_000)  // 4 minute timeout (matches recipient wait time)
+            } catch {
+                print("⚠️ [SENDER] Timeout sleep interrupted: \(error)")
+                return
+            }
             
             if let currentTransfer = activeTransfers[transferID],
                case .transferring = currentTransfer.status {
                 print("⏰ Transfer \(transferID.prefix(8)) timed out waiting for completion")
                 
-                // Check if we have most ACKs - if so, consider it successful
-                let ackCount = currentTransfer.acknowledgedChunks.count
-                let successThreshold = Int(Double(totalChunks) * 0.8)  // 80% threshold
+                // Check if we have most ACKs - but require 95% for completion
+                let ackCount = await MainActor.run { currentTransfer.acknowledgedChunks.count }
+                let successThreshold = Int(Double(totalChunks) * 0.95)  // 95% threshold (stricter)
                 
                 if ackCount >= successThreshold {
                     print("⏰ Most chunks acknowledged (\(ackCount)/\(totalChunks)), marking as completed")
@@ -489,12 +659,143 @@ class FileTransferManager: ObservableObject {
                     print("⏰ No ACKs received, marking as failed")
                     await updateTransferStatus(transferID, status: .failed(error: "No acknowledgments received"))
                 } else {
-                    print("⏰ Some ACKs received (\(ackCount)/\(totalChunks)), marking as partially completed")
-                    await updateTransferStatus(transferID, status: .completed)
+                    print("⏰ Insufficient ACKs received (\(ackCount)/\(totalChunks)), marking as failed")
+                    await updateTransferStatus(transferID, status: .failed(error: "Only \(ackCount)/\(totalChunks) chunks acknowledged"))
                 }
                 await cleanupTransfer(transferID)
             }
         }
+    }
+    
+    private func retransmitMissingChunks(transferID: String, transfer: FileTransfer, attempt: Int = 1) async {
+        guard let fileData = transfer.fileData,
+              let meshService = meshService else {
+            print("❌ Cannot retransmit - missing file data or mesh service")
+            return
+        }
+        
+        let totalChunks = transfer.request?.totalChunks ?? 0
+        let acknowledgedChunks = await MainActor.run { transfer.acknowledgedChunks }
+        
+        // Find missing chunks
+        var missingChunks: [UInt32] = []
+        for chunkIndex in 0..<totalChunks {
+            if !acknowledgedChunks.contains(chunkIndex) {
+                missingChunks.append(chunkIndex)
+            }
+        }
+        
+        print("📤 [RETRANSMIT] Attempt \(attempt): Retransmitting \(missingChunks.count) missing chunks for transfer \(transferID.prefix(8))")
+        print("📤 [RETRANSMIT] Missing chunks: \(missingChunks.prefix(10))") // Show first 10
+        
+        // Use progressively longer delays for each attempt
+        let baseDelay: UInt64 = 200_000_000  // Base 0.2s delay
+        let attemptDelay = baseDelay * UInt64(attempt)  // Scale by attempt number
+        
+        // For high packet loss, send each chunk multiple times with staggered delays
+        let repetitions = min(attempt, 3)  // Send up to 3 times per retransmission attempt
+        
+        for rep in 0..<repetitions {
+            print("📤 [RETRANSMIT] Attempt \(attempt), repetition \(rep + 1)/\(repetitions)")
+            
+            // Retransmit missing chunks with longer delays
+            for chunkIndex in missingChunks {
+                // Check if chunk was acknowledged during this retransmission
+                let isAcknowledged = await MainActor.run { transfer.acknowledgedChunks.contains(chunkIndex) }
+                if isAcknowledged {
+                    print("✅ [RETRANSMIT] Chunk \(chunkIndex) already acknowledged, skipping")
+                    continue
+                }
+                
+                let startOffset = Int(chunkIndex * chunkSize)
+                let endOffset = min(startOffset + Int(chunkSize), fileData.count)
+                let chunkData = fileData.subdata(in: startOffset..<endOffset)
+                let isLastChunk = chunkIndex == totalChunks - 1
+                
+                let chunk = FileChunk(
+                    transferID: transferID,
+                    chunkIndex: chunkIndex,
+                    chunkData: chunkData,
+                    isLastChunk: isLastChunk
+                )
+                
+                do {
+                    print("📤 [RETRANSMIT] Attempt \(attempt), rep \(rep + 1): Resending chunk \(chunkIndex) to recipient \(transfer.recipientID.prefix(8))")
+                    try await meshService.sendFileChunk(chunk, to: transfer.recipientID)
+                    
+                    // Stagger the delay between repetitions
+                    do {
+                        try await Task.sleep(nanoseconds: attemptDelay + UInt64(rep) * 100_000_000)  // Add 0.1s per repetition
+                    } catch {
+                        print("⚠️ [RETRANSMIT] Chunk delay interrupted: \(error)")
+                    }
+                } catch {
+                    print("❌ [RETRANSMIT] Attempt \(attempt), rep \(rep + 1): Failed to resend chunk \(chunkIndex): \(error)")
+                }
+            }
+            
+            // Wait between repetitions
+            if rep < repetitions - 1 {
+                do {
+                    try await Task.sleep(nanoseconds: 1_000_000_000)  // 1 second between repetitions
+                } catch {
+                    print("⚠️ [RETRANSMIT] Sleep interrupted: \(error)")
+                }
+            }
+        }
+        
+        print("📤 [RETRANSMIT] Finished retransmitting \(missingChunks.count) chunks with \(repetitions) repetitions")
+    }
+    
+    private func retransmitSpecificChunks(transferID: String, transfer: FileTransfer, missingChunks: [UInt32]) async {
+        guard let fileData = transfer.fileData,
+              let meshService = meshService else {
+            print("❌ Cannot retransmit specific chunks - missing file data or mesh service")
+            return
+        }
+        
+        print("📤 [SPECIFIC RETRANSMIT] Retransmitting \(missingChunks.count) specific chunks for transfer \(transferID.prefix(8))")
+        
+        // Retransmit specific missing chunks
+        for chunkIndex in missingChunks {
+            // Check if chunk was acknowledged since the status was sent
+            let isAcknowledged = await MainActor.run { transfer.acknowledgedChunks.contains(chunkIndex) }
+            if isAcknowledged {
+                print("✅ [SPECIFIC RETRANSMIT] Chunk \(chunkIndex) already acknowledged, skipping")
+                continue
+            }
+            
+            let startOffset = Int(chunkIndex * chunkSize)
+            let endOffset = min(startOffset + Int(chunkSize), fileData.count)
+            guard startOffset < fileData.count else { continue }
+            
+            let chunkData = fileData.subdata(in: startOffset..<endOffset)
+            let totalChunks = transfer.request?.totalChunks ?? 0
+            let isLastChunk = chunkIndex == totalChunks - 1
+            
+            let chunk = FileChunk(
+                transferID: transferID,
+                chunkIndex: chunkIndex,
+                chunkData: chunkData,
+                isLastChunk: isLastChunk
+            )
+            
+            do {
+                print("📤 [SPECIFIC RETRANSMIT] Resending chunk \(chunkIndex) to recipient \(transfer.recipientID.prefix(8))")
+                try await meshService.sendFileChunk(chunk, to: transfer.recipientID)
+                
+                // Small delay between chunks
+                do {
+                    try await Task.sleep(nanoseconds: 100_000_000)  // 0.1 second delay
+                } catch {
+                    print("⚠️ [SPECIFIC RETRANSMIT] Sleep interrupted: \(error)")
+                }
+            } catch {
+                print("❌ [SPECIFIC RETRANSMIT] Failed to resend chunk \(chunkIndex): \(error)")
+            }
+        }
+        
+        print("📤 [SPECIFIC RETRANSMIT] Finished retransmitting \(missingChunks.count) specific chunks")
     }
     
     private func sendChunkAck(transferID: String, chunkIndex: UInt32, received: Bool, errorMessage: String? = nil, to peerID: String) async {

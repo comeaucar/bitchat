@@ -1131,6 +1131,31 @@ class BluetoothMeshService: NSObject {
         print("✅ [MESH] ACK packet broadcasted for chunk \(ack.chunkIndex)")
     }
     
+    func sendFileChunkStatus(_ status: FileChunkStatus, to recipientID: String) async throws {
+        guard let payloadData = status.encode() else {
+            print("❌ [MESH] Failed to encode FileChunkStatus")
+            throw FileTransferError.invalidFileData
+        }
+        
+        let packet = BitchatPacket(
+            type: MessageType.fileChunkStatus.rawValue,
+            senderID: Data(myPeerID.utf8),
+            recipientID: Data(recipientID.utf8),
+            timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
+            payload: payloadData,
+            signature: nil,
+            ttl: 2
+        )
+        
+        print("📤 [MESH] Broadcasting chunk status for transfer \(status.transferID.prefix(8))")
+        print("📤 [MESH] Status packet: \(myPeerID.prefix(8)) → \(recipientID.prefix(8)), missing: \(status.missingChunks.count) chunks")
+        
+        // Use optimized routing for status messages
+        sendPacketWithOptimizedRouting(packet, preference: .reliable)
+        
+        print("✅ [MESH] Chunk status packet broadcasted")
+    }
+    
     func sendFileTransferComplete(_ completion: FileTransferComplete, to recipientID: String) async throws {
         guard let payloadData = completion.encode() else {
             throw FileTransferError.invalidFileData
@@ -2393,6 +2418,19 @@ class BluetoothMeshService: NSObject {
                 print("📥 [MESH] ACK details: from \(senderID.prefix(8)) to \(myPeerID.prefix(8)), recipientID in ACK: \(ack.recipientID.prefix(8))")
                 Task {
                     await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileChunkAck(ack, from: senderID)
+                }
+            }
+            
+        case .fileChunkStatus:
+            if let recipientIDData = packet.recipientID,
+               let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8),
+               recipientID == myPeerID,
+               let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
+               let status = FileChunkStatus.decode(from: packet.payload) {
+                print("📥 [MESH] Received file chunk status from \(senderID) for transfer \(status.transferID.prefix(8))")
+                print("📥 [MESH] Status details: highest chunk \(status.highestChunkReceived), missing \(status.missingChunks.count) chunks")
+                Task {
+                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileChunkStatus(status, from: senderID)
                 }
             } else {
                 print("❌ [MESH] Failed to decode file chunk ACK from \(packet.payload.count) bytes")
