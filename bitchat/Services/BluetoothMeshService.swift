@@ -1046,6 +1046,12 @@ class BluetoothMeshService: NSObject {
             throw FileTransferError.invalidFileData
         }
         
+        print("📤 [MESH] Sending file transfer request payload size: \(payloadData.count) bytes")
+        print("📤 [MESH] Request has PoW data: \(request.isPoWCompressed)")
+        if payloadData.count > 500 {
+            print("⚠️ [MESH] Large payload size may cause transmission issues")
+        }
+        
         let packet = BitchatPacket(
             type: MessageType.fileTransferRequest.rawValue,
             senderID: Data(myPeerID.utf8),
@@ -2349,14 +2355,20 @@ class BluetoothMeshService: NSObject {
                let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
                let request = FileTransferRequest.decode(from: packet.payload) {
                 print("📥 [MESH] Received file transfer request from \(senderID): \(request.fileName)")
+                print("📥 [MESH] Request payload size: \(packet.payload.count) bytes")
                 Task {
                     await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileTransferRequest(request, from: senderID)
                 }
             } else {
                 print("❌ [MESH] Failed to process file transfer request")
+                print("❌ [MESH] Payload size: \(packet.payload.count) bytes")
+                print("❌ [MESH] Payload preview: \(packet.payload.prefix(100))")
                 if let recipientIDData = packet.recipientID,
                    let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8) {
                     print("❌ [MESH] Request not for us: intended for \(recipientID.prefix(8)), we are \(myPeerID.prefix(8))")
+                    if recipientID == myPeerID {
+                        print("❌ [MESH] Request IS for us - JSON decode failed!")
+                    }
                 }
             }
             

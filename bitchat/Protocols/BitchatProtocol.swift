@@ -441,7 +441,7 @@ struct BitchatMessage: Codable, Equatable {
 struct FileTransferRequest: Codable {
     let transferID: String
     let fileName: String
-    let fileSize: UInt64  // Size in bytes
+    let fileSize: UInt64  // Size in bytes (compressed size if compressed)
     let mimeType: String?
     let fileHash: String  // SHA-256 hash for verification
     let chunkSize: UInt32  // Size of each chunk in bytes
@@ -451,7 +451,16 @@ struct FileTransferRequest: Codable {
     let senderID: String
     let timestamp: Date
     
-    init(fileName: String, fileSize: UInt64, fileData: Data, costPerMB: UInt64, senderID: String, chunkSize: UInt32 = 32768) {  // 32KB chunks
+    // PoW Compression fields
+    let originalFileSize: UInt64?  // Original file size before compression
+    let isPoWCompressed: Bool  // Whether file was compressed using PoW
+    let powNonce: UInt64?  // PoW nonce used for compression
+    let powWorkProof: Data?  // PoW proof data
+    let powIterations: UInt64?  // Number of PoW iterations performed
+    let compressionRatio: Double?  // Achieved compression ratio
+    let computationTime: Double?  // Time spent on PoW compression
+    
+    init(fileName: String, fileSize: UInt64, fileData: Data, costPerMB: UInt64, senderID: String, chunkSize: UInt32 = 32768, originalFileSize: UInt64? = nil, powNonce: UInt64? = nil, powWorkProof: Data? = nil, powIterations: UInt64? = nil, compressionRatio: Double? = nil, computationTime: Double? = nil, customTotalCost: UInt64? = nil) {
         self.transferID = UUID().uuidString
         self.fileName = fileName
         self.fileSize = fileSize
@@ -459,22 +468,250 @@ struct FileTransferRequest: Codable {
         self.fileHash = SHA256.hash(data: fileData).compactMap { String(format: "%02x", $0) }.joined()
         self.chunkSize = chunkSize
         self.totalChunks = UInt32((fileSize + UInt64(chunkSize) - 1) / UInt64(chunkSize))  // Ceiling division
+        
+        // PoW Compression data
+        self.originalFileSize = originalFileSize
+        self.isPoWCompressed = powNonce != nil && powWorkProof != nil
+        self.powNonce = powNonce
+        self.powWorkProof = powWorkProof
+        self.powIterations = powIterations
+        self.compressionRatio = compressionRatio
+        self.computationTime = computationTime
         self.costPerMB = costPerMB
         
-        // Calculate total cost: (file size in MB) * cost per MB
-        let fileSizeInMB = max(1, (fileSize + 1024 * 1024 - 1) / (1024 * 1024))  // Ceiling division, minimum 1 MB
-        self.totalCost = fileSizeInMB * costPerMB
+        // Use custom total cost if provided, otherwise calculate from file size
+        if let customCost = customTotalCost {
+            self.totalCost = customCost
+        } else {
+            // Calculate total cost: (file size in MB) * cost per MB
+            let fileSizeInMB = max(1, (fileSize + 1024 * 1024 - 1) / (1024 * 1024))  // Ceiling division, minimum 1 MB
+            self.totalCost = fileSizeInMB * costPerMB
+        }
         
         self.senderID = senderID
         self.timestamp = Date()
     }
     
     func encode() -> Data? {
-        try? JSONEncoder().encode(self)
+        // Create a version without the large work proof data to reduce packet size
+        let compactRequest = CompactFileTransferRequest(from: self)
+        
+        if let jsonData = try? JSONEncoder().encode(compactRequest) {
+            print("📦 [PROTOCOL] FileTransferRequest JSON size: \(jsonData.count) bytes")
+            return jsonData
+        }
+        
+        return nil
     }
     
+    
     static func decode(from data: Data) -> FileTransferRequest? {
-        try? JSONDecoder().decode(FileTransferRequest.self, from: data)
+        // Try to decode as compact request first
+        if let compactRequest = try? JSONDecoder().decode(CompactFileTransferRequest.self, from: data) {
+            return compactRequest.toFullRequest()
+        }
+        // Fallback to full request
+        return try? JSONDecoder().decode(FileTransferRequest.self, from: data)
+    }
+    
+    // Internal method to create a request with a specific transferID
+    static func __createWithTransferID(
+        transferID: String,
+        fileName: String,
+        fileSize: UInt64,
+        mimeType: String?,
+        fileHash: String,
+        chunkSize: UInt32,
+        totalChunks: UInt32,
+        costPerMB: UInt64,
+        totalCost: UInt64,
+        senderID: String,
+        timestamp: Date,
+        originalFileSize: UInt64?,
+        isPoWCompressed: Bool,
+        powNonce: UInt64?,
+        powWorkProof: Data?,
+        powIterations: UInt64?,
+        compressionRatio: Double?,
+        computationTime: Double?
+    ) -> FileTransferRequest {
+        var request = FileTransferRequest(
+            fileName: fileName,
+            fileSize: fileSize,
+            fileData: Data(),
+            costPerMB: costPerMB,
+            senderID: senderID,
+            chunkSize: chunkSize,
+            originalFileSize: originalFileSize,
+            powNonce: powNonce,
+            powWorkProof: powWorkProof,
+            powIterations: powIterations,
+            compressionRatio: compressionRatio,
+            computationTime: computationTime,
+            customTotalCost: totalCost
+        )
+        
+        // Since we can't directly modify the transferID (it's let), we'll use a different approach
+        // We'll create a modified version using the withTransferID method
+        return request.withTransferID(transferID, mimeType: mimeType, fileHash: fileHash, totalChunks: totalChunks, timestamp: timestamp)
+    }
+    
+    private func withTransferID(_ newTransferID: String, mimeType: String?, fileHash: String, totalChunks: UInt32, timestamp: Date) -> FileTransferRequest {
+        // Create a copy with the new transferID
+        return FileTransferRequest(
+            transferID: newTransferID,
+            fileName: fileName,
+            fileSize: fileSize,
+            mimeType: mimeType,
+            fileHash: fileHash,
+            chunkSize: chunkSize,
+            totalChunks: totalChunks,
+            costPerMB: costPerMB,
+            totalCost: totalCost,
+            senderID: senderID,
+            timestamp: timestamp,
+            originalFileSize: originalFileSize,
+            isPoWCompressed: isPoWCompressed,
+            powNonce: powNonce,
+            powWorkProof: powWorkProof,
+            powIterations: powIterations,
+            compressionRatio: compressionRatio,
+            computationTime: computationTime
+        )
+    }
+    
+    // Private initializer that accepts all parameters including transferID
+    private init(
+        transferID: String,
+        fileName: String,
+        fileSize: UInt64,
+        mimeType: String?,
+        fileHash: String,
+        chunkSize: UInt32,
+        totalChunks: UInt32,
+        costPerMB: UInt64,
+        totalCost: UInt64,
+        senderID: String,
+        timestamp: Date,
+        originalFileSize: UInt64?,
+        isPoWCompressed: Bool,
+        powNonce: UInt64?,
+        powWorkProof: Data?,
+        powIterations: UInt64?,
+        compressionRatio: Double?,
+        computationTime: Double?
+    ) {
+        self.transferID = transferID
+        self.fileName = fileName
+        self.fileSize = fileSize
+        self.mimeType = mimeType
+        self.fileHash = fileHash
+        self.chunkSize = chunkSize
+        self.totalChunks = totalChunks
+        self.costPerMB = costPerMB
+        self.totalCost = totalCost
+        self.senderID = senderID
+        self.timestamp = timestamp
+        self.originalFileSize = originalFileSize
+        self.isPoWCompressed = isPoWCompressed
+        self.powNonce = powNonce
+        self.powWorkProof = powWorkProof
+        self.powIterations = powIterations
+        self.compressionRatio = compressionRatio
+        self.computationTime = computationTime
+    }
+}
+
+// Compact version of FileTransferRequest without large binary data
+struct CompactFileTransferRequest: Codable {
+    let transferID: String
+    let fileName: String
+    let fileSize: UInt64
+    let mimeType: String?
+    let fileHash: String
+    let chunkSize: UInt32
+    let totalChunks: UInt32
+    let costPerMB: UInt64
+    let totalCost: UInt64
+    let senderID: String
+    let timestamp: Date
+    
+    // PoW Compression fields (without large binary data)
+    let originalFileSize: UInt64?
+    let isPoWCompressed: Bool
+    let powNonce: UInt64?
+    let powIterations: UInt64?
+    let compressionRatio: Double?
+    let computationTime: Double?
+    
+    init(from fullRequest: FileTransferRequest) {
+        self.transferID = fullRequest.transferID
+        self.fileName = fullRequest.fileName
+        self.fileSize = fullRequest.fileSize
+        self.mimeType = fullRequest.mimeType
+        self.fileHash = fullRequest.fileHash
+        self.chunkSize = fullRequest.chunkSize
+        self.totalChunks = fullRequest.totalChunks
+        self.costPerMB = fullRequest.costPerMB
+        self.totalCost = fullRequest.totalCost
+        self.senderID = fullRequest.senderID
+        self.timestamp = fullRequest.timestamp
+        
+        // Copy PoW fields (excluding large binary data)
+        self.originalFileSize = fullRequest.originalFileSize
+        self.isPoWCompressed = fullRequest.isPoWCompressed
+        self.powNonce = fullRequest.powNonce
+        self.powIterations = fullRequest.powIterations
+        self.compressionRatio = fullRequest.compressionRatio
+        self.computationTime = fullRequest.computationTime
+    }
+    
+    func toFullRequest() -> FileTransferRequest {
+        // Create a new request and manually set the transferID to preserve it
+        let request = FileTransferRequest(
+            fileName: fileName,
+            fileSize: fileSize,
+            fileData: Data(), // Empty data for requests
+            costPerMB: costPerMB,
+            senderID: senderID,
+            chunkSize: chunkSize,
+            originalFileSize: originalFileSize,
+            powNonce: powNonce,
+            powWorkProof: nil, // Work proof omitted for size
+            powIterations: powIterations,
+            compressionRatio: compressionRatio,
+            computationTime: computationTime,
+            customTotalCost: totalCost
+        )
+        
+        // Use reflection to set the transferID to the original value
+        let mirror = Mirror(reflecting: request)
+        if let transferIDKey = mirror.children.first(where: { $0.label == "transferID" }) {
+            // This is a bit of a hack - we need to preserve the original transferID
+            // For now, let's create a new struct with the correct transferID
+            return FileTransferRequest.__createWithTransferID(
+                transferID: transferID,
+                fileName: fileName,
+                fileSize: fileSize,
+                mimeType: mimeType,
+                fileHash: fileHash,
+                chunkSize: chunkSize,
+                totalChunks: totalChunks,
+                costPerMB: costPerMB,
+                totalCost: totalCost,
+                senderID: senderID,
+                timestamp: timestamp,
+                originalFileSize: originalFileSize,
+                isPoWCompressed: isPoWCompressed,
+                powNonce: powNonce,
+                powWorkProof: nil,
+                powIterations: powIterations,
+                compressionRatio: compressionRatio,
+                computationTime: computationTime
+            )
+        }
+        
+        return request
     }
 }
 

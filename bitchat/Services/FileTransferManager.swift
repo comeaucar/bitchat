@@ -58,42 +58,80 @@ class FileTransferManager: ObservableObject {
         let fileName = fileURL.lastPathComponent
         
         // Use provided file data or try to read from disk
-        let actualFileData: Data
+        let originalFileData: Data
         if let providedData = fileData {
-            actualFileData = providedData
+            originalFileData = providedData
             print("📤 Using provided file data: \(providedData.count) bytes for \(fileName)")
         } else {
             print("📤 No file data provided, attempting to read from disk: \(filePath)")
             do {
-                actualFileData = try Data(contentsOf: fileURL)
-                print("📤 Read file data from disk: \(actualFileData.count) bytes")
+                originalFileData = try Data(contentsOf: fileURL)
+                print("📤 Read file data from disk: \(originalFileData.count) bytes")
             } catch {
                 print("❌ FileTransferManager: Failed to read file at \(filePath): \(error)")
                 throw FileTransferError.invalidFileData
             }
         }
         
-        let fileSize = UInt64(actualFileData.count)
+        let originalFileSize = UInt64(originalFileData.count)
         
-        guard fileSize > 0 else {
+        guard originalFileSize > 0 else {
             throw FileTransferError.invalidFileData
         }
         
         // Check if we can handle this transfer
-        try validateFileTransfer(fileSize: fileSize)
+        try validateFileTransfer(fileSize: originalFileSize)
         
-        // Calculate cost
+        // Apply PoW compression for larger files
+        let finalFileData: Data
+        var powCompressionResult: PoWCompressionUtil.CompressionResult?
+        
+        if originalFileSize > 10_000 {  // Apply PoW compression to files > 10KB
+            print("📦 [PoW-COMPRESS] Attempting PoW compression for \(originalFileSize) bytes")
+            
+            if let compressionResult = PoWCompressionUtil.compressWithPoW(
+                data: originalFileData,
+                targetCompressionRatio: 0.7,  // Try to achieve 70% compression
+                maxComputationTime: 10.0      // Allow up to 10 seconds of computation
+            ) {
+                finalFileData = compressionResult.compressedData
+                powCompressionResult = compressionResult
+                
+                let compressionPercent = (1.0 - compressionResult.compressionRatio) * 100
+                print("📦 [PoW-COMPRESS] SUCCESS: \(String(format: "%.1f", compressionPercent))% compression achieved")
+                print("📦 [PoW-COMPRESS] Size reduced: \(originalFileSize) → \(finalFileData.count) bytes")
+                print("📦 [PoW-COMPRESS] Computation: \(compressionResult.iterations) iterations in \(String(format: "%.2f", compressionResult.computationTime))s")
+            } else {
+                print("📦 [PoW-COMPRESS] No compression benefit, using original file")
+                finalFileData = originalFileData
+            }
+        } else {
+            print("📦 [PoW-COMPRESS] File too small for PoW compression, using original")
+            finalFileData = originalFileData
+        }
+        
+        let fileSize = UInt64(finalFileData.count)
+        
+        // Calculate cost with compression discount
         let costPerMB = calculateCostPerMB()
+        let transferCost = calculateTransferCost(fileSize: fileSize, isCompressed: powCompressionResult != nil)
         let senderID = await meshService.getPeerID()
         
         // Create transfer request
         let request = FileTransferRequest(
             fileName: fileName,
             fileSize: fileSize,
-            fileData: actualFileData,
+            fileData: finalFileData,
             costPerMB: costPerMB,
             senderID: senderID,
-            chunkSize: chunkSize
+            chunkSize: chunkSize,
+            originalFileSize: originalFileSize,
+            powNonce: powCompressionResult?.nonce,
+            powWorkProof: powCompressionResult?.workProof,
+            powIterations: powCompressionResult?.iterations,
+            compressionRatio: powCompressionResult?.compressionRatio,
+            computationTime: powCompressionResult?.computationTime,
+            customTotalCost: transferCost
         )
         
         // Create transfer object
@@ -107,7 +145,7 @@ class FileTransferManager: ObservableObject {
             totalCost: request.totalCost,
             status: .requesting
         )
-        transfer.fileData = actualFileData
+        transfer.fileData = finalFileData
         transfer.request = request
         
         // Add to active transfers
@@ -911,12 +949,58 @@ class FileTransferManager: ObservableObject {
             let bitchatDir = documentsPath.appendingPathComponent("bitchat_files")
             try FileManager.default.createDirectory(at: bitchatDir, withIntermediateDirectories: true)
             
+            // Check if file was PoW compressed and decompress if needed
+            let finalFileData: Data
+            if let transfer = activeTransfers[transferID],
+               let request = transfer.request,
+               let powNonce = request.powNonce,
+               let powWorkProof = request.powWorkProof,
+               let powIterations = request.powIterations,
+               let originalSize = request.originalFileSize {
+                
+                print("📦 [PoW-DECOMPRESS] Decompressing file with PoW verification")
+                print("📦 [PoW-DECOMPRESS] Original size: \(originalSize), compressed size: \(fileData.count)")
+                
+                // Decompress and verify PoW proof
+                if let decompressResult = PoWCompressionUtil.decompressWithVerification(
+                    compressedData: fileData,
+                    originalSize: Int(originalSize),
+                    nonce: powNonce,
+                    workProof: powWorkProof,
+                    iterations: powIterations
+                ) {
+                    if decompressResult.isValidProof {
+                        print("✅ [PoW-DECOMPRESS] Valid PoW proof, using decompressed data")
+                        finalFileData = decompressResult.originalData
+                        
+                        // Award sender for providing valid PoW compression
+                        await awardPoWCompressionReward(
+                            senderID: transfer.senderID,
+                            originalSize: Int(originalSize),
+                            compressedSize: fileData.count,
+                            compressionRatio: decompressResult.compressionRatio,
+                            workProof: powWorkProof,
+                            iterations: powIterations
+                        )
+                    } else {
+                        print("❌ [PoW-DECOMPRESS] Invalid PoW proof, using compressed data as-is")
+                        finalFileData = fileData
+                    }
+                } else {
+                    print("❌ [PoW-DECOMPRESS] Failed to decompress, using compressed data as-is")
+                    finalFileData = fileData
+                }
+            } else {
+                // No PoW compression, use data as-is
+                finalFileData = fileData
+            }
+            
             // Add timestamp to avoid filename conflicts
             let timestamp = Date().timeIntervalSince1970
             let fileURL = bitchatDir.appendingPathComponent("\(Int(timestamp))_\(fileName)")
             
-            try fileData.write(to: fileURL)
-            print("💾 Saved file to: \(fileURL.path)")
+            try finalFileData.write(to: fileURL)
+            print("💾 Saved file to: \(fileURL.path) (\(finalFileData.count) bytes)")
             
             // Update transfer with saved path
             await MainActor.run {
@@ -1008,6 +1092,54 @@ class FileTransferManager: ObservableObject {
         formatter.allowedUnits = [.useMB, .useKB, .useBytes]
         formatter.countStyle = .file
         return formatter.string(fromByteCount: Int64(bytes))
+    }
+    
+    /// Calculate cost for file transfer based on size and compression
+    private func calculateTransferCost(fileSize: UInt64, isCompressed: Bool = false) -> UInt64 {
+        let fileSizeInMB = Double(fileSize) / (1024.0 * 1024.0)
+        let baseCost = UInt64(fileSizeInMB * Double(baseFileTransferCostPerMB))
+        
+        // Discount for compressed files (20% reduction)
+        let compressionDiscount = isCompressed ? 0.8 : 1.0
+        
+        return UInt64(Double(baseCost) * compressionDiscount)
+    }
+    
+    /// Award tokens to sender for providing valid PoW compression
+    private func awardPoWCompressionReward(
+        senderID: String,
+        originalSize: Int,
+        compressedSize: Int,
+        compressionRatio: Double,
+        workProof: Data,
+        iterations: UInt64
+    ) async {
+        
+        // Calculate reward based on compression efficiency and computational work
+        let compressionSavings = originalSize - compressedSize
+        let compressionPercent = (1.0 - compressionRatio) * 100
+        
+        // Base reward: 1 µRLT per KB saved
+        let baseReward = UInt64(compressionSavings / 1024)
+        
+        // Efficiency bonus: up to 2x for excellent compression (>50% reduction)
+        let efficiencyMultiplier = min(2.0, max(1.0, compressionPercent / 25.0))
+        
+        // Work bonus: reward computational effort (iterations)
+        let workBonus = min(100, iterations / 1000) // Up to 100 µRLT for work
+        
+        let totalReward = UInt64(Double(baseReward) * efficiencyMultiplier) + workBonus
+        
+        print("🏆 [PoW-REWARD] Awarding \(totalReward) µRLT to \(senderID.prefix(8))")
+        print("🏆 [PoW-REWARD] Details: \(compressionSavings) bytes saved (\(String(format: "%.1f", compressionPercent))% compression)")
+        print("🏆 [PoW-REWARD] Breakdown: \(baseReward) base + \(String(format: "%.1f", efficiencyMultiplier))x efficiency + \(workBonus) work")
+        print("🏆 [PoW-REWARD] Work proof: \(workProof.prefix(8).hexEncodedString())...")
+        
+        // TODO: Integrate with actual reward system
+        // This should create a transaction and add to the DAG
+        // For now, we'll just log the reward
+        
+        addSystemMessage("🏆 PoW Compression Reward: \(totalReward) µRLT awarded for \(String(format: "%.1f", compressionPercent))% compression")
     }
     
     // MARK: - MIME Type Detection

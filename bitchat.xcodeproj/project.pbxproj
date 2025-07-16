@@ -23,6 +23,7 @@
 		1F48A8CEEE9399D1EBD08F0C /* OptimizedBloomFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB043CA5EEB9AC8B07D61E97 /* OptimizedBloomFilter.swift */; };
 		215ADFFE5601EECD074A6CD3 /* FeeBeaconManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B43D8C6BB5BE8300E311FB /* FeeBeaconManager.swift */; };
 		24F17B1446E13F42652B7B08 /* PasswordProtectedChannelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 036A1A705AAF9EC21F4354BE /* PasswordProtectedChannelTests.swift */; };
+		2831950BB3FB7A7A5F296942 /* PoWCompressionUtil.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D1B26D545109C5B219D655D /* PoWCompressionUtil.swift */; };
 		2E71E320EA921498C57E023B /* BitchatMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FA8FF26ABDC1C642A8C7AE5 /* BitchatMessageTests.swift */; };
 		31D147471B9F4E2815352DDA /* LinkPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9AC141774F6671FCDC347DC7 /* LinkPreviewView.swift */; };
 		32D69C7A4B4ED520E7EE22CD /* FeeBeaconManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8B43D8C6BB5BE8300E311FB /* FeeBeaconManager.swift */; };
@@ -70,6 +71,7 @@
 		ADC66F95FBD513B10411ADB3 /* MessagePaddingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8DE9CDF66D4E52D268851048 /* MessagePaddingTests.swift */; };
 		AE6D6B26B47BC80E860EB2C4 /* PacketHeaderV2.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B9CD2EEE6F7A4EFDA8B2544 /* PacketHeaderV2.swift */; };
 		B0CA7796B2B2AC2B33F84548 /* CompressionUtil.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32F149C43D1915831B60FE09 /* CompressionUtil.swift */; };
+		B3B51E65D257B4D9353ED73D /* PoWCompressionUtil.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D1B26D545109C5B219D655D /* PoWCompressionUtil.swift */; };
 		B82CC302A8ED5C17846B02A9 /* WalletManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568678C6B709971F478230B7 /* WalletManager.swift */; };
 		B95EDA250E2E2A3FBCE08DED /* WalletManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 568678C6B709971F478230B7 /* WalletManager.swift */; };
 		BA79AD39746C0FA336EBCEF3 /* BridgeService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 13E6428CB9885C020C5E42FB /* BridgeService.swift */; };
@@ -142,6 +144,7 @@
 /* Begin PBXFileReference section */
 		036A1A705AAF9EC21F4354BE /* PasswordProtectedChannelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PasswordProtectedChannelTests.swift; sourceTree = "<group>"; };
 		03C57F452B55FD0FD8F51421 /* bitchatTests_macOS.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = bitchatTests_macOS.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		0D1B26D545109C5B219D655D /* PoWCompressionUtil.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoWCompressionUtil.swift; sourceTree = "<group>"; };
 		12B9C3EDF3BC73D3BC106DA4 /* DeliveryTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeliveryTracker.swift; sourceTree = "<group>"; };
 		136696FC4436A02D98CE6A77 /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainManager.swift; sourceTree = "<group>"; };
 		13E6428CB9885C020C5E42FB /* BridgeService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BridgeService.swift; sourceTree = "<group>"; };
@@ -275,6 +278,7 @@
 				ED176FF3B274E35C2D827894 /* BatteryOptimizer.swift */,
 				32F149C43D1915831B60FE09 /* CompressionUtil.swift */,
 				CB043CA5EEB9AC8B07D61E97 /* OptimizedBloomFilter.swift */,
+				0D1B26D545109C5B219D655D /* PoWCompressionUtil.swift */,
 			);
 			path = Utils;
 			sourceTree = "<group>";
@@ -601,6 +605,7 @@
 				0245710AEAA58AD0A1425234 /* OptimizedBloomFilter.swift in Sources */,
 				522DA362058BB7D7E0491DEE /* PacketHeaderV2.swift in Sources */,
 				DEC5C589C69BA028271926FC /* PacketTTL.swift in Sources */,
+				B3B51E65D257B4D9353ED73D /* PoWCompressionUtil.swift in Sources */,
 				7EA2D1AE213C5212DA2369C7 /* ProofOfWork.swift in Sources */,
 				5F83BD9FA23810F0262B9CE7 /* RelayTx.swift in Sources */,
 				EC2AD7FFBB8D6F5E13A573C2 /* RewardDistributor.swift in Sources */,
@@ -645,6 +650,7 @@
 				1F48A8CEEE9399D1EBD08F0C /* OptimizedBloomFilter.swift in Sources */,
 				AE6D6B26B47BC80E860EB2C4 /* PacketHeaderV2.swift in Sources */,
 				F61035FF949B5420953D88B9 /* PacketTTL.swift in Sources */,
+				2831950BB3FB7A7A5F296942 /* PoWCompressionUtil.swift in Sources */,
 				0A1104FC14B06AA62281EED0 /* ProofOfWork.swift in Sources */,
 				4020B7AB37B800CF344D451F /* RelayTx.swift in Sources */,
 				1CFA1B310A3DE48AF56C85C2 /* RewardDistributor.swift in Sources */,
