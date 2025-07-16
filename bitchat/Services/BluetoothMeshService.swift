@@ -1084,7 +1084,7 @@ class BluetoothMeshService: NSObject {
         }
         
         let packet = BitchatPacket(
-            type: MessageType.message.rawValue,  // TEMPORARY: Use message type instead of fileChunk
+            type: MessageType.fileChunk.rawValue,
             senderID: Data(myPeerID.utf8),
             recipientID: Data(recipientID.utf8),
             timestamp: UInt64(Date().timeIntervalSince1970 * 1000),
@@ -1665,19 +1665,6 @@ class BluetoothMeshService: NSObject {
         
         switch MessageType(rawValue: packet.type) {
         case .message:
-            // Check if this is actually a file chunk disguised as a message
-            if let recipientIDData = packet.recipientID,
-               let recipientID = String(data: recipientIDData.trimmingNullBytes(), encoding: .utf8),
-               recipientID == myPeerID,
-               let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8),
-               let chunk = FileChunk.decode(from: packet.payload) {
-                print("📥 [MESH] Received file chunk \(chunk.chunkIndex) (as message) from \(senderID) for transfer \(chunk.transferID.prefix(8))")
-                Task {
-                    await (self.delegate as? ChatViewModel)?.fileTransferManager.handleFileChunk(chunk, from: senderID)
-                }
-                return
-            }
-            
             // Unified message handler for both broadcast and private messages
             guard let senderID = String(data: packet.senderID.trimmingNullBytes(), encoding: .utf8) else {
                 return
